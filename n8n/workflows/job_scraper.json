@@ -1,0 +1,270 @@
+{
+    "name": "Sponsored Jobs Scraper",
+    "nodes": [
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "field": "hours",
+                            "hoursInterval": 24
+                        }
+                    ]
+                }
+            },
+            "id": "schedule-trigger",
+            "name": "Schedule Trigger",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1,
+            "position": [
+                250,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "url": "https://remoteok.com/api",
+                "options": {}
+            },
+            "id": "remoteok-api",
+            "name": "RemoteOK API",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                450,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "url": "https://jobs.github.com/positions.json",
+                "options": {}
+            },
+            "id": "github-jobs",
+            "name": "GitHub Jobs",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                450,
+                400
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "// Process and normalize job data from different sources\nconst items = [];\n\nfor (const item of $input.all()) {\n  const source = item.json.source || 'unknown';\n  let normalized = {};\n  \n  if (source === 'remoteok') {\n    normalized = {\n      title: item.json.position,\n      company: item.json.company,\n      description: item.json.description,\n      location: item.json.location || 'Remote',\n      job_url: item.json.url,\n      source: 'remoteok',\n      posted_date: item.json.date\n    };\n  } else if (source === 'github') {\n    normalized = {\n      title: item.json.title,\n      company: item.json.company,\n      description: item.json.description,\n      location: item.json.location,\n      job_url: item.json.url,\n      source: 'github',\n      posted_date: item.json.created_at\n    };\n  }\n  \n  // Generate URL hash for deduplication\n  const crypto = require('crypto');\n  normalized.url_hash = crypto.createHash('md5').update(normalized.job_url).digest('hex');\n  \n  items.push({ json: normalized });\n}\n\nreturn items;"
+            },
+            "id": "normalize-jobs",
+            "name": "Normalize Jobs",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 1,
+            "position": [
+                650,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "authentication": "headerAuth",
+                "url": "={{ $env.SUPABASE_URL }}/rest/v1/companies",
+                "options": {
+                    "headers": {
+                        "headerParameters": [
+                            {
+                                "name": "apikey",
+                                "value": "={{ $env.SUPABASE_KEY }}"
+                            },
+                            {
+                                "name": "Authorization",
+                                "value": "Bearer {{ $env.SUPABASE_KEY }}"
+                            }
+                        ]
+                    },
+                    "queryParameters": {
+                        "parameters": [
+                            {
+                                "name": "employer_name",
+                                "value": "eq.{{ $json.company }}"
+                            },
+                            {
+                                "name": "select",
+                                "value": "id,employer_name,approval_rate"
+                            }
+                        ]
+                    }
+                }
+            },
+            "id": "check-sponsorship",
+            "name": "Check Sponsorship",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                850,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "string": [
+                        {
+                            "value1": "={{ $json.length }}",
+                            "operation": "isNotEmpty"
+                        }
+                    ]
+                }
+            },
+            "id": "filter-sponsored",
+            "name": "Filter Sponsored Companies",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 1,
+            "position": [
+                1050,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "authentication": "headerAuth",
+                "requestMethod": "POST",
+                "url": "={{ $env.SUPABASE_URL }}/rest/v1/jobs",
+                "options": {
+                    "headers": {
+                        "headerParameters": [
+                            {
+                                "name": "apikey",
+                                "value": "={{ $env.SUPABASE_KEY }}"
+                            },
+                            {
+                                "name": "Authorization",
+                                "value": "Bearer {{ $env.SUPABASE_KEY }}"
+                            },
+                            {
+                                "name": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "name": "Prefer",
+                                "value": "return=representation"
+                            }
+                        ]
+                    }
+                },
+                "bodyParametersJson": "={{ JSON.stringify({\n  company_id: $json[0].id,\n  title: $node[\"Normalize Jobs\"].json.title,\n  description: $node[\"Normalize Jobs\"].json.description,\n  location: $node[\"Normalize Jobs\"].json.location,\n  job_url: $node[\"Normalize Jobs\"].json.job_url,\n  url_hash: $node[\"Normalize Jobs\"].json.url_hash,\n  source: $node[\"Normalize Jobs\"].json.source,\n  posted_date: $node[\"Normalize Jobs\"].json.posted_date\n}) }}"
+            },
+            "id": "insert-job",
+            "name": "Insert Job",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                1250,
+                200
+            ]
+        },
+        {
+            "parameters": {
+                "url": "http://localhost:5000/generate-embedding",
+                "options": {
+                    "bodyParametersJson": "={{ JSON.stringify({\n  job_id: $json.id,\n  description: $json.description\n}) }}"
+                }
+            },
+            "id": "trigger-embedding",
+            "name": "Trigger Embedding Generation",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 3,
+            "position": [
+                1450,
+                200
+            ]
+        }
+    ],
+    "connections": {
+        "Schedule Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "RemoteOK API",
+                        "type": "main",
+                        "index": 0
+                    },
+                    {
+                        "node": "GitHub Jobs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "RemoteOK API": {
+            "main": [
+                [
+                    {
+                        "node": "Normalize Jobs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "GitHub Jobs": {
+            "main": [
+                [
+                    {
+                        "node": "Normalize Jobs",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Normalize Jobs": {
+            "main": [
+                [
+                    {
+                        "node": "Check Sponsorship",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Check Sponsorship": {
+            "main": [
+                [
+                    {
+                        "node": "Filter Sponsored Companies",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Filter Sponsored Companies": {
+            "main": [
+                [
+                    {
+                        "node": "Insert Job",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Insert Job": {
+            "main": [
+                [
+                    {
+                        "node": "Trigger Embedding Generation",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "settings": {},
+    "staticData": null,
+    "tags": [],
+    "triggerCount": 1,
+    "updatedAt": "2026-01-30T00:00:00.000Z",
+    "versionId": "1"
+}
