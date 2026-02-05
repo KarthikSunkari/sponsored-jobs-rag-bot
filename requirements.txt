@@ -15,11 +15,12 @@ numpy==1.26.3
 
 # Embeddings & ML
 sentence-transformers==2.3.1
-torch==2.1.2
-transformers==4.36.2
 
-# Llama integration
-llama-cpp-python==0.2.27
+# LLM & Agent Framework
+groq==0.4.2
+langchain==0.1.6
+langchain-groq==0.0.1
+langchain-community==0.0.20
 
 # Web scraping
 requests==2.31.0

@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
-from rag.llama_scorer import get_llama_scorer
+from agents.groq_client import GroqClient
 
 
 def get_resume_data() -> Optional[Dict]:
@@ -92,23 +92,24 @@ def score_with_llama(
     jobs: List[Dict],
     max_jobs: int = 20
 ) -> List[Dict]:
-    """Score top jobs with Llama-3."""
-    scorer = get_llama_scorer()
+    """Score top jobs with Llama-3 via Groq API."""
+    scorer = GroqClient()
     scored_jobs = []
     
-    print(f"Scoring top {min(len(jobs), max_jobs)} jobs with Llama-3...")
+    print(f"Scoring top {min(len(jobs), max_jobs)} jobs with Groq Llama-3...")
     
-    for job in tqdm(jobs[:max_jobs], desc="Llama scoring"):
+    for job in tqdm(jobs[:max_jobs], desc="Groq scoring"):
         try:
-            result = scorer.score_job_match(
+            result = scorer.score_job_relevance(
                 resume_text=resume_text,
                 job_title=job.get("title", ""),
                 job_description=job.get("description", ""),
-                company_name=job.get("companies", {}).get("employer_name", "")
+                company=job.get("companies", {}).get("employer_name", "")
             )
             
             job["llama_score"] = result["score"]
             job["llama_reasoning"] = result["reasoning"]
+            job["key_matches"] = result.get("key_matches", [])
             scored_jobs.append(job)
             
         except Exception as e:

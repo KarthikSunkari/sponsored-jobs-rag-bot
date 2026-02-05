@@ -1,0 +1,46 @@
+name: Daily Job Scraping
+
+on:
+  schedule:
+    # Run daily at 9 AM EST (2 PM UTC)
+    - cron: '0 14 * * *'
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  scrape-jobs:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Scrape jobs from multiple sources
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python etl/scrape_jobs.py --sources linkedin indeed github remoteok --max-per-source 20
+      
+      - name: Generate embeddings
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          EMBEDDING_MODEL: ${{ vars.EMBEDDING_MODEL || 'all-MiniLM-L6-v2' }}
+        run: |
+          python api/embedding_api.py --batch-process
+      
+      - name: Summary
+        run: |
+          echo "✅ Job scraping completed!"
+          echo "📊 Check Supabase for new jobs"

@@ -1,0 +1,53 @@
+name: Daily Job Matching
+
+on:
+  schedule:
+    # Run daily at 10 AM EST (3 PM UTC), after scraping
+    - cron: '0 15 * * *'
+  workflow_dispatch:  # Allow manual triggers
+
+jobs:
+  match-jobs:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Match jobs using Groq API
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_MODEL: ${{ vars.GROQ_MODEL || 'llama-3.1-8b-instant' }}
+          MIN_RELEVANCE_SCORE: ${{ vars.MIN_RELEVANCE_SCORE || '80' }}
+          MAX_DAILY_MATCHES: ${{ vars.MAX_DAILY_MATCHES || '20' }}
+        run: |
+          python rag/match_jobs.py
+      
+      - name: Send notifications
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+        run: |
+          python agents/notifier.py
+      
+      - name: Summary
+        run: |
+          echo "✅ Job matching completed!"
+          echo "📧 Notification sent to user"

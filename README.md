@@ -1,37 +1,46 @@
-# Sponsored Jobs RAG Bot
+# Intelligent Jobs Search Agent
 
-Automated job sourcing pipeline that finds H-1B/PERM sponsored positions using n8n, Supabase, pgvector, and local Llama-3.
+**Serverless multi-agent pipeline utilizing LangChain and Groq's Llama-3 API for ultra-low latency inference**
+
+Architected with cloud-native RAG using Supabase (pgvector) to rank opportunities against resume embeddings. Implements Model Context Protocol (MCP) server to standardize agent tool-use, orchestrating GitHub Actions for rate-limited scraping. Ingests latest DOL LCA data to boost companies with proven H-1B/PERM filing history.
 
 ## Features
 
-✅ **Zero-Cost Operation** - Runs on Supabase free tier + local hardware  
-✅ **Smart Filtering** - Only shows jobs from companies with proven sponsorship history  
-✅ **RAG-Powered Matching** - 92% semantic accuracy using pgvector + Llama-3  
-✅ **Multi-Source Scraping** - LinkedIn, Indeed, GitHub Jobs, RemoteOK  
+✅ **Zero-Cost Serverless** - Groq API (30 req/min) + GitHub Actions + Supabase free tier  
+✅ **Ultra-Low Latency** - Groq's Llama-3.1-8B-Instant (<1s inference)  
+✅ **LangChain Agents** - Multi-agent orchestration for intelligent job search  
+✅ **MCP Server** - Standardized tool interfaces for agent tool-use  
+✅ **Cloud-Native RAG** - pgvector semantic search with 92% accuracy  
+✅ **Smart Filtering** - DOL LCA data for proven sponsorship history  
+✅ **GitHub Actions** - Rate-limited scraping (2,000 min/month free)  
 ✅ **Intelligent Notifications** - Daily digest of top matches (>80% relevance)  
-✅ **Application Tracking** - Never apply to the same job twice  
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   n8n       │────▶│  Supabase    │◀────│  Local      │
-│  Scraper    │     │  (pgvector)  │     │  Llama-3    │
-└─────────────┘     └──────────────┘     └─────────────┘
-      │                     │                     │
-      ▼                     ▼                     ▼
-  Job Boards          Vector Search         Relevance
-  (50+/day)          (Embeddings)           Scoring
+┌──────────────────┐     ┌──────────────┐     ┌─────────────┐
+│ GitHub Actions   │────▶│  Supabase    │◀────│  Groq API   │
+│ (Scraping)       │     │  (pgvector)  │     │  (Llama-3)  │
+└──────────────────┘     └──────────────┘     └─────────────┘
+         │                      │                     │
+         ▼                      ▼                     ▼
+   Job Boards            Vector Search          LangChain
+   (50+/day)            (Embeddings)            Agents
+                              │                     │
+                              └─────────┬───────────┘
+                                        ▼
+                                   MCP Server
+                              (Standardized Tools)
 ```
 
 ## Setup
 
 ### 1. Prerequisites
 
-- Python 3.9+
-- Node.js 18+ (for n8n)
+- Python 3.11+
 - Supabase account (free tier)
-- 8GB+ RAM (for Llama-3)
+- Groq API key (free tier: 30 req/min)
+- GitHub account (for Actions)
 
 ### 2. Install Dependencies
 
@@ -40,25 +49,13 @@ cd sponsored-jobs-rag-bot
 
 # Python dependencies
 pip install -r requirements.txt
-
-# n8n (global install)
-npm install -g n8n
-
-# llama.cpp (for local Llama-3)
-brew install llama.cpp  # macOS
 ```
 
-### 3. Download Llama-3 Model
+### 3. Get Groq API Key
 
-```bash
-# Create models directory
-mkdir -p models
-
-# Download 4-bit quantized Llama-3-8B
-huggingface-cli download TheBloke/Llama-3-8B-Instruct-GGUF \
-  llama-3-8b-instruct-q4_0.gguf \
-  --local-dir models
-```
+1. Sign up at [console.groq.com](https://console.groq.com)
+2. Create a new API key (free tier: 30 requests/min)
+3. Copy the key for next step
 
 ### 4. Configure Supabase
 
@@ -74,7 +71,10 @@ huggingface-cli download TheBloke/Llama-3-8B-Instruct-GGUF \
 
 ```bash
 cp .env.example .env
-# Edit .env with your Supabase credentials
+# Edit .env with:
+# - Supabase URL and keys
+# - Groq API key
+# - GitHub token (for Actions)
 ```
 
 ### 6. Process Sponsorship Data
@@ -107,56 +107,73 @@ client.client.table("user_resume").insert({
 }).execute()
 ```
 
-### 8. Start Services
+### 8. Configure GitHub Actions
+
+1. Go to your GitHub repo → Settings → Secrets and variables → Actions
+2. Add secrets:
+   - `SUPABASE_URL`
+   - `SUPABASE_KEY`
+   - `SUPABASE_SERVICE_KEY`
+   - `GROQ_API_KEY`
+   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFICATION_EMAIL`
+3. Workflows will run automatically (daily at 9 AM and 10 AM EST)
+
+### 9. Test the System
 
 ```bash
-# Terminal 1: Start embedding API
-python api/embedding_api.py
+# Test Groq API connection
+python agents/groq_client.py
 
-# Terminal 2: Start n8n
-n8n start
+# Test MCP server
+python agents/mcp_server.py
 
-# Terminal 3: Run job matching (manual)
+# Test LangChain agent
+python agents/langchain_agent.py
+
+# Run job matching manually
 python rag/match_jobs.py
 ```
 
-### 9. Import n8n Workflow
-
-1. Open n8n at `http://localhost:5678`
-2. Go to Workflows → Import
-3. Select `n8n/workflows/job_scraper.json`
-4. Activate the workflow
-
 ## Usage
 
-### Daily Workflow
+### Daily Workflow (Automated)
 
-1. **n8n scrapes jobs** (automated, daily at 9 AM)
-   - Fetches from RemoteOK, GitHub Jobs, etc.
-   - Filters by sponsorship companies
+1. **GitHub Actions scrapes jobs** (9 AM EST)
+   - Fetches from LinkedIn, Indeed, GitHub Jobs, RemoteOK
+   - Filters by sponsorship companies (DOL LCA data)
    - Stores in Supabase
+   - Generates embeddings automatically
 
-2. **Embeddings generated** (automatic via API)
-   - Triggered by n8n after job insertion
-   - Uses sentence-transformers
+2. **GitHub Actions matches jobs** (10 AM EST)
+   - Retrieves new jobs from Supabase
+   - Performs vector similarity search (pgvector)
+   - Scores top matches with Groq Llama-3
+   - Sends email notification with top matches
 
-3. **Match jobs** (run manually or schedule)
+3. **Manual trigger** (optional)
    ```bash
+   # Trigger workflows manually from GitHub Actions tab
+   # Or run locally:
    python rag/match_jobs.py
-   ```
-
-4. **Send notifications** (schedule with cron)
-   ```bash
    python agents/notifier.py
    ```
 
 ### Manual Commands
 
 ```bash
-# Process new sponsorship data
+# Process new sponsorship data (DOL LCA)
 python etl/process_sponsorship_data.py
 
-# Match jobs against resume
+# Test Groq API connection
+python agents/groq_client.py
+
+# Test MCP server
+python agents/mcp_server.py
+
+# Test LangChain agent
+python agents/langchain_agent.py
+
+# Match jobs against resume (uses Groq)
 python rag/match_jobs.py
 
 # Send daily digest
@@ -186,13 +203,16 @@ SCRAPE_INTERVAL_HOURS=24
 MIN_JOBS_PER_DAY=50
 ```
 
-## Tier 1 Features (Implemented)
+## Implemented Features
 
-✅ Multi-source job scraping  
-✅ Sponsorship filtering (>70% approval rate)  
-✅ Smart notifications (>80% relevance)  
-✅ Application tracking  
-✅ Deduplication (URL hash)  
+✅ **Serverless Architecture** - Zero infrastructure management  
+✅ **Multi-Agent System** - LangChain orchestration with MCP  
+✅ **Ultra-Low Latency** - Groq API (<1s inference)  
+✅ **Cloud-Native RAG** - Supabase pgvector for semantic search  
+✅ **Multi-Source Scraping** - GitHub Actions automation  
+✅ **Sponsorship Filtering** - DOL LCA data (>70% approval rate)  
+✅ **Smart Notifications** - Daily digest (>80% relevance)  
+✅ **Application Tracking** - Deduplication and tracking  
 
 ## Future Enhancements (Tier 2 & 3)
 
@@ -205,33 +225,34 @@ MIN_JOBS_PER_DAY=50
 
 ## Troubleshooting
 
-**Llama model not found:**
-```bash
-# Download manually
-huggingface-cli download TheBloke/Llama-3-8B-Instruct-GGUF
-```
+**Groq API errors:**
+- Verify API key in GitHub Secrets
+- Check rate limits (30 req/min on free tier)
+- Test locally: `python agents/groq_client.py`
 
 **Supabase connection error:**
 - Check `.env` credentials
 - Verify pgvector extension is enabled
 
-**No jobs found:**
-- Run n8n workflow manually first
-- Check n8n logs for scraping errors
+**GitHub Actions not running:**
+- Check workflow permissions in repo settings
+- Verify all secrets are configured
+- Check Actions tab for error logs
 
-**Slow Llama inference:**
-- Reduce `MAX_DAILY_MATCHES` in `.env`
-- Use smaller model (Llama-3-7B)
+**No jobs found:**
+- Trigger scraping workflow manually
+- Check Supabase `jobs` table
+- Verify sponsorship data is loaded
 
 ## Cost Breakdown
 
-| Component | Cost |
-|-----------|------|
-| Supabase (500MB) | $0 |
-| n8n (self-hosted) | $0 |
-| Llama-3 (local) | $0 |
-| Embeddings (local) | $0 |
-| **Total** | **$0/month** |
+| Component | Free Tier Limits | Cost |
+|-----------|------------------|------|
+| Groq API | 30 req/min, 14,400 req/day | $0 |
+| GitHub Actions | 2,000 minutes/month | $0 |
+| Supabase | 500MB DB + pgvector | $0 |
+| Embeddings (sentence-transformers) | Unlimited (local) | $0 |
+| **Total** | **Plenty for daily use** | **$0/month** |
 
 ## License
 
