@@ -48,12 +48,30 @@ def find_similar_jobs(resume_embedding: List[float], limit: int = 50) -> List[Di
         
         # Calculate cosine similarity
         import numpy as np
+        import json
+        import ast
         
-        resume_vec = np.array(resume_embedding)
+        resume_vec = np.array(resume_embedding, dtype=float)
         similarities = []
         
         for item in result.data:
-            job_vec = np.array(item["embedding"])
+            # Handle both list and string formats
+            embedding = item["embedding"]
+            if isinstance(embedding, str):
+                try:
+                    # Try JSON first
+                    embedding = json.loads(embedding)
+                except:
+                    try:
+                        # Try ast.literal_eval for Python list strings
+                        embedding = ast.literal_eval(embedding)
+                    except:
+                        print(f"Warning: Could not parse embedding for job {item['job_id']}")
+                        continue
+            
+            job_vec = np.array(embedding, dtype=float)
+            
+            # Calculate cosine similarity
             similarity = np.dot(resume_vec, job_vec) / (
                 np.linalg.norm(resume_vec) * np.linalg.norm(job_vec)
             )
@@ -69,7 +87,7 @@ def find_similar_jobs(resume_embedding: List[float], limit: int = 50) -> List[Di
         # Fetch full job details
         job_ids = [j["job_id"] for j in top_jobs]
         jobs_result = client.client.table("jobs").select(
-            "*, companies(employer_name, approval_rate)"
+            "*, companies(employer_name, approval_rate, total_approvals)"
         ).in_("id", job_ids).execute()
         
         # Merge similarity scores
@@ -158,6 +176,15 @@ def main():
     
     resume_text = resume.get("resume_text", "")
     resume_embedding = resume.get("embedding")
+    
+    # Parse resume embedding if it's a string
+    if isinstance(resume_embedding, str):
+        import ast
+        try:
+            resume_embedding = ast.literal_eval(resume_embedding)
+        except:
+            print("Error parsing resume embedding, regenerating...")
+            resume_embedding = None
     
     # Generate embedding if not exists
     if not resume_embedding:

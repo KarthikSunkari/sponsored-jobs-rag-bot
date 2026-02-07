@@ -1,0 +1,68 @@
+# Google Search Queries for Job Scraping
+
+# New Grad Inclusive
+newgrad:
+  description: "Entry-level positions for new graduates and early career professionals"
+  query: >
+    (site:boards.greenhouse.io OR site:jobs.ashbyhq.com OR site:jobs.lever.co OR 
+    site:myworkdayjobs.com OR site:jobs.jobvite.com OR site:smartrecruiters.com OR 
+    site:icims.com) ("New Grad" OR "University" OR "Associate Software" OR 
+    "Associate MTS" OR "SMTS" OR "Entry Level" OR "SDE I" OR "Junior Software" OR 
+    "Campus" OR "Early Talent" OR "Rotational" OR "Technology Analyst") 
+    ("Software Engineer" OR "Developer" OR "SDE") -Senior -Sr -Staff -Principal -Director
+  
+  keywords:
+    - "New Grad"
+    - "University"
+    - "Associate Software"
+    - "Entry Level"
+    - "SDE I"
+    - "Junior Software"
+    - "Campus"
+    - "Early Talent"
+  
+  exclude_keywords:
+    - "Senior"
+    - "Sr"
+    - "Staff"
+    - "Principal"
+    - "Director"
+
+# Mid Level Inclusive
+midlevel:
+  description: "Mid-level positions for experienced software engineers"
+  query: >
+    (site:boards.greenhouse.io OR site:jobs.ashbyhq.com OR site:jobs.lever.co OR 
+    site:myworkdayjobs.com OR site:jobs.jobvite.com OR site:smartrecruiters.com) 
+    ("Software Engineer" OR "Application Developer" OR "SDE II" OR "SDE 2" OR 
+    "MTS" OR "Member of Technical Staff" OR "Backend") 
+    ("Distributed Systems" OR "Java" OR "Cloud") 
+    -Intern -Senior -Sr -Staff -Principal -Director -"New Grad"
+  
+  keywords:
+    - "Software Engineer"
+    - "Application Developer"
+    - "SDE II"
+    - "SDE 2"
+    - "MTS"
+    - "Member of Technical Staff"
+    - "Backend"
+  
+  exclude_keywords:
+    - "Intern"
+    - "Senior"
+    - "Sr"
+    - "Staff"
+    - "Principal"
+    - "Director"
+    - "New Grad"
+
+# ATS Platforms to target
+ats_platforms:
+  - "boards.greenhouse.io"
+  - "jobs.ashbyhq.com"
+  - "jobs.lever.co"
+  - "myworkdayjobs.com"
+  - "jobs.jobvite.com"
+  - "smartrecruiters.com"
+  - "icims.com"

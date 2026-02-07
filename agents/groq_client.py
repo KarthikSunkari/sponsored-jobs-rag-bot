@@ -133,9 +133,21 @@ Rate this job's relevance to the resume (0-100). Focus on:
                 max_tokens=512
             )
             
-            # Parse JSON response
+            # Parse JSON response - handle extra text before/after JSON
             import json
-            result = json.loads(response)
+            import re
+            
+            # Try to extract JSON object from response
+            # Look for {...} pattern
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', response, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(0)
+                result = json.loads(json_str)
+            else:
+                # Try parsing entire response (strip whitespace)
+                result = json.loads(response.strip())
+            
             return {
                 "score": int(result.get("score", 0)),
                 "reasoning": result.get("reasoning", ""),
@@ -143,8 +155,12 @@ Rate this job's relevance to the resume (0-100). Focus on:
             }
             
         except Exception as e:
-            print(f"Error scoring job: {e}")
-            return {"score": 0, "reasoning": f"Error: {str(e)}", "key_matches": []}
+            # Return default values on error
+            return {
+                "score": 0,
+                "reasoning": f"Scoring error: {str(e)[:50]}",
+                "key_matches": []
+            }
     
     def test_connection(self) -> bool:
         """Test Groq API connection."""

@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Job scraper service
+  scraper:
+    build: .
+    container_name: jobs-scraper
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+    volumes:
+      - ./:/app
+      - chrome-data:/root/.wdm
+    command: python -u etl/scrape_jobs.py --level newgrad --max-jobs 20
+    networks:
+      - jobs-network
+
+  # Job matcher service
+  matcher:
+    build: .
+    container_name: jobs-matcher
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.1-8b-instant}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      - MIN_RELEVANCE_SCORE=${MIN_RELEVANCE_SCORE:-80}
+      - MAX_DAILY_MATCHES=${MAX_DAILY_MATCHES:-20}
+    volumes:
+      - ./:/app
+    command: python -u rag/match_jobs.py
+    depends_on:
+      - scraper
+    networks:
+      - jobs-network
+
+  # Email notifier service
+  notifier:
+    build: .
+    container_name: jobs-notifier
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - NOTIFICATION_EMAIL=${NOTIFICATION_EMAIL}
+    volumes:
+      - ./:/app
+    command: python -u agents/notifier.py
+    depends_on:
+      - matcher
+    networks:
+      - jobs-network
+
+volumes:
+  chrome-data:
+
+networks:
+  jobs-network:
+    driver: bridge

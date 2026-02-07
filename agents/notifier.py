@@ -20,57 +20,75 @@ load_dotenv()
 
 def format_match_email(matches: List[Dict]) -> str:
     """Format matches into HTML email."""
-    html = """
+    html_parts = ["""
     <html>
     <head>
         <style>
-            body { font-family: Arial, sans-serif; }
-            .match { 
+            body {{ font-family: Arial, sans-serif; }}
+            .match {{ 
                 border: 1px solid #ddd; 
                 padding: 15px; 
                 margin: 10px 0; 
                 border-radius: 5px;
-            }
-            .score { 
+            }}
+            .score {{ 
                 color: #2ecc71; 
                 font-weight: bold; 
                 font-size: 18px;
-            }
-            .company { color: #3498db; }
-            .title { font-size: 16px; font-weight: bold; }
-            .reasoning { 
+            }}
+            .company {{ color: #3498db; }}
+            .title {{ font-size: 16px; font-weight: bold; }}
+            .reasoning {{ 
                 color: #666; 
                 font-style: italic; 
                 margin-top: 10px;
-            }
+            }}
         </style>
     </head>
     <body>
         <h2>🎯 Your Daily Job Matches</h2>
-        <p>Found {} high-quality sponsored job matches for you!</p>
-    """.format(len(matches))
+        <p>Found {count} high-quality sponsored job matches for you!</p>
+    """.format(count=len(matches))]
     
     for i, match in enumerate(matches, 1):
-        html += f"""
+        title = match.get('title', 'N/A')
+        employer = match.get('employer_name', 'N/A')
+        location = match.get('location', 'N/A')
+        score = match.get('llama_score', 0)
+        approval_rate = match.get('approval_rate', 0)
+        reasoning = match.get('llama_reasoning', 'No reasoning available')
+        job_url = match.get('job_url', '#')
+        
+        match_html = """
         <div class="match">
-            <div class="title">{i}. {match['title']}</div>
-            <div class="company">🏢 {match['employer_name']}</div>
-            <div>📍 {match['location']}</div>
-            <div class="score">⭐ Match Score: {match['llama_score']}/100</div>
-            <div>✅ Sponsorship Approval Rate: {match['approval_rate']:.1f}%</div>
-            <div class="reasoning">💡 {match['llama_reasoning']}</div>
+            <div class="title">{num}. {title}</div>
+            <div class="company">🏢 {employer}</div>
+            <div>📍 {location}</div>
+            <div class="score">⭐ Match Score: {score}/100</div>
+            <div>✅ Sponsorship Approval Rate: {rate:.1f}%</div>
+            <div class="reasoning">💡 {reasoning}</div>
             <div style="margin-top: 10px;">
-                <a href="{match['job_url']}" style="color: #3498db;">View Job →</a>
+                <a href="{url}" style="color: #3498db;">View Job →</a>
             </div>
         </div>
-        """
+        """.format(
+            num=i,
+            title=title,
+            employer=employer,
+            location=location,
+            score=score,
+            rate=approval_rate,
+            reasoning=reasoning,
+            url=job_url
+        )
+        html_parts.append(match_html)
     
-    html += """
+    html_parts.append("""
     </body>
     </html>
-    """
+    """)
     
-    return html
+    return ''.join(html_parts)
 
 
 def send_email(to_email: str, subject: str, html_content: str) -> bool:
@@ -103,6 +121,8 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         
     except Exception as e:
         print(f"Error sending email: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
