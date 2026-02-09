@@ -1,37 +1,65 @@
-# Intelligent Jobs Search Agent
+# Intelligent Sponsored Jobs Search Agent
 
-**Serverless multi-agent pipeline utilizing LangChain and Groq's Llama-3 API for ultra-low latency inference**
-
-Architected with cloud-native RAG using Supabase (pgvector) to rank opportunities against resume embeddings. Implements Model Context Protocol (MCP) server to standardize agent tool-use, orchestrating GitHub Actions for rate-limited scraping. Ingests latest DOL LCA data to boost companies with proven H-1B/PERM filing history.
-
-## Features
-
-✅ **Zero-Cost Serverless** - Groq API (30 req/min) + GitHub Actions + Supabase free tier  
-✅ **Ultra-Low Latency** - Groq's Llama-3.1-8B-Instant (<1s inference)  
-✅ **LangChain Agents** - Multi-agent orchestration for intelligent job search  
-✅ **MCP Server** - Standardized tool interfaces for agent tool-use  
-✅ **Cloud-Native RAG** - pgvector semantic search with 92% accuracy  
-✅ **Smart Filtering** - DOL LCA data for proven sponsorship history  
-✅ **GitHub Actions** - Rate-limited scraping (2,000 min/month free)  
-✅ **Intelligent Notifications** - Daily digest of top matches (>80% relevance)  
+MCP-based job search system using LangChain and Groq's Llama-3 API for semantic job matching against resume embeddings. Leverages DOL H-1B/PERM/LCA data to filter companies by visa sponsorship history.
 
 ## Architecture
 
 ```
-┌──────────────────┐     ┌──────────────┐     ┌─────────────┐
-│ GitHub Actions   │────▶│  Supabase    │◀────│  Groq API   │
-│ (Scraping)       │     │  (pgvector)  │     │  (Llama-3)  │
-└──────────────────┘     └──────────────┘     └─────────────┘
-         │                      │                     │
-         ▼                      ▼                     ▼
-   Job Boards            Vector Search          LangChain
-   (50+/day)            (Embeddings)            Agents
-                              │                     │
-                              └─────────┬───────────┘
-                                        ▼
-                                   MCP Server
-                              (Standardized Tools)
+┌─────────────────────────────────────────────────────────────────┐
+│                     GITHUB ACTIONS (Scheduler)                  │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐  │
+│  │ Daily 9 AM   │      │ Daily 6 PM   │      │  On-demand   │  │
+│  │ Scrape Jobs  │      │ Match & Rank │      │  Manual Run  │  │
+│  └──────────────┘      └──────────────┘      └──────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+           │                       │                      │
+           ▼                       ▼                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        MCP SERVER (FastMCP)                     │
+│  Tools Exposed:                                                 │
+│  • search_jobs(query, location, sponsorship_filter)             │
+│  • ingest_job_posting(url, company_name, title)                 │
+│  • match_resume(job_ids, resume_embedding)                      │
+│  • score_relevance(job_id, resume_text) → 0-100                 │
+└─────────────────────────────────────────────────────────────────┘
+           │                       │
+           ▼                       ▼
+┌──────────────────┐    ┌──────────────────────────────────┐
+│  SerpAPI Google  │    │  Supabase (pgvector)             │
+│  Search          │    │  • companies (15K+ H1B sponsors) │
+│  • LinkedIn Jobs │    │  • jobs (embeddings)             │
+│  • Indeed        │    │  • user_resume (embedding)       │
+│  • Glassdoor     │    │  • job_matches (scores)          │
+└──────────────────┘    └──────────────────────────────────┘
+           │                       │
+           └───────────┬───────────┘
+                       ▼
+           ┌───────────────────────┐
+           │  LangChain Agent       │
+           │  (Groq Llama-3.1-70B)  │
+           │  • Orchestrates tools  │
+           │  • Scores relevance    │
+           │  • Generates summaries │
+           └───────────────────────┘
+                       │
+                       ▼
+           ┌───────────────────────┐
+           │  Email Notifier        │
+           │  • Top 5 matches/day   │
+           │  • >85% relevance only │
+           │  • Gmail SMTP          │
+           └───────────────────────┘
 ```
+
+## Features
+
+- **Zero-Cost Architecture** - Groq API (30 req/min) + GitHub Actions (2,000 min/month) + Supabase free tier
+- **Sub-Second Inference** - Groq's Llama-3.1-8B-Instant for job relevance scoring
+- **MCP Server** - Standardized tool interfaces for agent orchestration
+- **Semantic Search** - pgvector with 384-dimensional embeddings (all-MiniLM-L6-v2)
+- **Sponsorship Filtering** - DOL H-1B/PERM/LCA data (15,000+ companies, >70% approval rate)
+- **Automated Workflow** - GitHub Actions cron jobs for daily scraping and matching
+- **Smart Notifications** - Email digest with top matches (>80% relevance threshold)
 
 ## Setup
 
@@ -46,8 +74,6 @@ Architected with cloud-native RAG using Supabase (pgvector) to rank opportunitie
 
 ```bash
 cd sponsored-jobs-rag-bot
-
-# Python dependencies
 pip install -r requirements.txt
 ```
 
@@ -80,7 +106,7 @@ cp .env.example .env
 ### 6. Process Sponsorship Data
 
 ```bash
-# This will process H-1B, PERM, and LCA data and upload to Supabase
+# Process H-1B, PERM, and LCA data and upload to Supabase
 python etl/process_sponsorship_data.py
 ```
 
@@ -116,7 +142,7 @@ client.client.table("user_resume").insert({
    - `SUPABASE_SERVICE_KEY`
    - `GROQ_API_KEY`
    - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFICATION_EMAIL`
-3. Workflows will run automatically (daily at 9 AM and 10 AM EST)
+3. Workflows will run automatically (daily at 9 AM and 6 PM EST)
 
 ### 9. Test the System
 
@@ -139,12 +165,12 @@ python rag/match_jobs.py
 ### Daily Workflow (Automated)
 
 1. **GitHub Actions scrapes jobs** (9 AM EST)
-   - Fetches from LinkedIn, Indeed, GitHub Jobs, RemoteOK
+   - Fetches from LinkedIn, Indeed, Glassdoor via SerpAPI
    - Filters by sponsorship companies (DOL LCA data)
    - Stores in Supabase
    - Generates embeddings automatically
 
-2. **GitHub Actions matches jobs** (10 AM EST)
+2. **GitHub Actions matches jobs** (6 PM EST)
    - Retrieves new jobs from Supabase
    - Performs vector similarity search (pgvector)
    - Scores top matches with Groq Llama-3
@@ -205,23 +231,23 @@ MIN_JOBS_PER_DAY=50
 
 ## Implemented Features
 
-✅ **Serverless Architecture** - Zero infrastructure management  
-✅ **Multi-Agent System** - LangChain orchestration with MCP  
-✅ **Ultra-Low Latency** - Groq API (<1s inference)  
-✅ **Cloud-Native RAG** - Supabase pgvector for semantic search  
-✅ **Multi-Source Scraping** - GitHub Actions automation  
-✅ **Sponsorship Filtering** - DOL LCA data (>70% approval rate)  
-✅ **Smart Notifications** - Daily digest (>80% relevance)  
-✅ **Application Tracking** - Deduplication and tracking  
+- **Serverless Architecture** - Zero infrastructure management
+- **MCP-Based Orchestration** - Standardized tool interfaces
+- **Sub-Second Inference** - Groq API (<1s per job)
+- **Cloud-Native RAG** - Supabase pgvector for semantic search
+- **Multi-Source Scraping** - GitHub Actions automation
+- **Sponsorship Filtering** - DOL LCA data (>70% approval rate)
+- **Smart Notifications** - Daily digest (>80% relevance)
+- **Application Tracking** - Deduplication and tracking
 
-## Future Enhancements (Tier 2 & 3)
+## Future Enhancements
 
-- [ ] AI cover letter generation
-- [ ] Company research agent (Glassdoor scraping)
-- [ ] Skill gap analysis
-- [ ] Auto-apply bot (Playwright)
-- [ ] Salary negotiation agent
-- [ ] Interview prep generator
+- AI cover letter generation
+- Company research agent (Glassdoor scraping)
+- Skill gap analysis
+- Auto-apply bot (Playwright)
+- Salary negotiation agent
+- Interview prep generator
 
 ## Troubleshooting
 
@@ -260,12 +286,8 @@ MIT
 
 ## Contributing
 
-PRs welcome! Focus areas:
+PRs welcome. Focus areas:
 - Additional job board integrations
 - Improved Llama prompts
 - Better email templates
 - Application tracking UI
-
----
-
-Built with ❤️ for visa-seeking job hunters
