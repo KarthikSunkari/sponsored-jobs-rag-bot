@@ -1,6 +1,6 @@
 # Intelligent Sponsored Jobs Search Agent
 
-MCP-based job search system using LangChain and Groq's Llama-3 API for semantic job matching against resume embeddings. Leverages DOL H-1B/PERM/LCA data to filter companies by visa sponsorship history.
+MCP-based job search system using LangChain and Groq's Llama-3.1-8B-Instant for semantic job matching against resume embeddings. Leverages DOL H-1B/PERM/LCA data to filter companies by visa sponsorship history.
 
 ## Architecture
 
@@ -36,7 +36,7 @@ MCP-based job search system using LangChain and Groq's Llama-3 API for semantic 
                        ▼
            ┌───────────────────────┐
            │  LangChain Agent       │
-           │  (Groq Llama-3.1-70B)  │
+           │  (Groq Llama-3.1-8B)   │
            │  • Orchestrates tools  │
            │  • Scores relevance    │
            │  • Generates summaries │
@@ -45,8 +45,8 @@ MCP-based job search system using LangChain and Groq's Llama-3 API for semantic 
                        ▼
            ┌───────────────────────┐
            │  Email Notifier        │
-           │  • Top 5 matches/day   │
-           │  • >85% relevance only │
+           │  • Top 10 matches/day  │
+           │  • >80% relevance only │
            │  • Gmail SMTP          │
            └───────────────────────┘
 ```
