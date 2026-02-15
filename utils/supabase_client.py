@@ -17,7 +17,7 @@ class SupabaseClient:
         key = os.getenv("SUPABASE_KEY")
         
         if not url or not key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env file")
+            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set as environment variables (or in .env file)")
         
         self.client: Client = create_client(url, key)
     

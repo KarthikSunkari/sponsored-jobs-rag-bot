@@ -103,18 +103,15 @@ class GroqClient:
         Returns:
             Dict with score (0-100), reasoning, and key_matches
         """
-        system_prompt = """You are an expert job matching AI. Analyze job-resume fit and return a JSON response with:
-{
-  "score": <0-100 integer>,
-  "reasoning": "<2-3 sentence explanation>",
-  "key_matches": ["<skill/experience match 1>", "<match 2>", "<match 3>"]
-}"""
-        
+        system_prompt = """You are an expert job matching AI. You MUST respond with ONLY a valid JSON object, no other text.
+Return exactly this format:
+{"score": <0-100 integer>, "reasoning": "<2-3 sentence explanation>", "key_matches": ["<skill1>", "<skill2>", "<skill3>"]}"""
+
         user_prompt = f"""Job Title: {job_title}
 Company: {company}
 
 Job Description:
-{job_description[:2000]}  # Truncate to avoid token limits
+{job_description[:2000]}
 
 Resume:
 {resume_text[:2000]}
@@ -123,14 +120,17 @@ Rate this job's relevance to the resume (0-100). Focus on:
 1. Required skills match
 2. Experience level alignment
 3. Domain/industry fit
-4. Career progression potential"""
+4. Career progression potential
+
+Respond with ONLY a JSON object."""
 
         try:
             response = self.generate(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                temperature=0.3,  # Lower temperature for consistent scoring
-                max_tokens=512
+                temperature=0.1,  # Low temperature for consistent JSON output
+                max_tokens=512,
+                response_format={"type": "json_object"}
             )
             
             # Parse JSON response - handle extra text before/after JSON

@@ -44,47 +44,41 @@ def load_search_queries() -> Dict:
 def google_search_jobs_api(query: str, max_results: int = 20) -> List[str]:
     """
     Search for jobs using Google Custom Search API.
-    
+
     Args:
-        query: Search query
+        query: Search query (full query string from YAML)
         max_results: Maximum results
-        
+
     Returns:
         List of job URLs
     """
     print(f"🔍 Searching with Google Custom Search API...")
-    
+
     api_client = get_google_search_client()
-    
+
     if not api_client.api_key or not api_client.search_engine_id:
         print("⚠️  API not configured, will use Selenium fallback")
         return []
-    
+
+    ats_platforms = [
+        "greenhouse.io", "ashbyhq.com", "lever.co",
+        "myworkdayjobs.com", "jobvite.com", "smartrecruiters.com", "icims.com"
+    ]
+
     try:
-        # Extract role and level from query
-        # Query format: "(site:...) software engineer newgrad"
-        parts = query.split(")")
-        if len(parts) > 1:
-            role_level = parts[1].strip()
-            role_parts = role_level.rsplit(' ', 1)
-            if len(role_parts) == 2:
-                role, level = role_parts
-            else:
-                role = role_level
-                level = "newgrad"
-        else:
-            role = "software engineer"
-            level = "newgrad"
-        
-        urls = api_client.search_jobs_ats_platforms(role, level, max_results=max_results)
-        
+        results = api_client.search_jobs(query, max_results=max_results)
+        urls = [
+            r["link"] for r in results
+            if r.get("link") and any(p in r["link"] for p in ats_platforms)
+        ]
+
         if urls:
             print(f"✅ Found {len(urls)} job URLs via API")
             return urls
         else:
             print("⚠️  No results from API, will try Selenium fallback")
             return []
-            
+
     except Exception as e:
         print(f"⚠️  API error: {e}")
         print("Will use Selenium fallback...")
@@ -195,32 +189,31 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
     Returns:
         List of job URLs
     """
+    # ATS platforms we care about
+    ats_platforms = [
+        "greenhouse.io", "ashbyhq.com", "lever.co",
+        "myworkdayjobs.com", "jobvite.com", "smartrecruiters.com", "icims.com"
+    ]
+
     # Tier 1: Try SerpAPI first (most reliable)
     serpapi_client = get_serpapi_client()
     if serpapi_client.api_key:
         print("🔍 Trying SerpAPI (Tier 1 - Most Reliable)...")
         try:
-            # Extract role and level from query
-            parts = query.split(")")
-            if len(parts) > 1:
-                role_level = parts[1].strip()
-                role_parts = role_level.rsplit(' ', 1)
-                if len(role_parts) == 2:
-                    role, level = role_parts
-                else:
-                    role = role_level
-                    level = "newgrad"
-            else:
-                role = "software engineer"
-                level = "newgrad"
-            
-            urls = serpapi_client.search_jobs_ats_platforms(role, level, max_results=max_results)
-            
+            # Send the full YAML query directly to SerpAPI
+            results = serpapi_client.search_jobs(query, num_results=max_results)
+
+            # Filter to ATS platform URLs only
+            urls = [
+                r["link"] for r in results
+                if r.get("link") and any(p in r["link"] for p in ats_platforms)
+            ]
+
             if urls:
                 print(f"✅ SerpAPI Success: {len(urls)} jobs found")
                 return urls
             else:
-                print("⚠️  SerpAPI returned no results, trying Custom Search API...")
+                print("⚠️  SerpAPI returned no ATS results, trying Custom Search API...")
         except Exception as e:
             print(f"⚠️  SerpAPI error: {e}, trying Custom Search API...")
     else:
@@ -231,21 +224,15 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
     if api_client.api_key and api_client.search_engine_id:
         print("🔍 Trying Custom Search API (Tier 2)...")
         try:
-            parts = query.split(")")
-            if len(parts) > 1:
-                role_level = parts[1].strip()
-                role_parts = role_level.rsplit(' ', 1)
-                if len(role_parts) == 2:
-                    role, level = role_parts
-                else:
-                    role = role_level
-                    level = "newgrad"
-            else:
-                role = "software engineer"
-                level = "newgrad"
-            
-            urls = api_client.search_jobs_ats_platforms(role, level, max_results=max_results)
-            
+            # Send the full query directly
+            results = api_client.search_jobs(query, max_results=max_results)
+
+            # Filter to ATS platform URLs only
+            urls = [
+                r["link"] for r in results
+                if r.get("link") and any(p in r["link"] for p in ats_platforms)
+            ]
+
             if urls:
                 print(f"✅ Custom Search API Success: {len(urls)} jobs found")
                 return urls
@@ -261,84 +248,251 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
     return google_search_jobs_selenium(query, max_results, headless)
 
 
-def extract_job_details(url: str) -> Optional[Dict]:
-    """Extract job details from ATS platform URL."""
+def _extract_greenhouse(url: str) -> Optional[Dict]:
+    """Extract job details via Greenhouse public JSON API."""
+    # URL format: https://boards.greenhouse.io/{company}/jobs/{id}
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        job_data = {
-            'job_url': url,
-            'url_hash': hashlib.md5(url.encode()).hexdigest(),
-            'scraped_at': datetime.now().isoformat()
-        }
-        
-        # Platform-specific extraction (same as before)
-        if 'greenhouse.io' in url:
-            job_data['source'] = 'greenhouse'
-            job_data['title'] = soup.find('h1', class_='app-title')
-            job_data['company'] = soup.find('span', class_='company-name')
-            job_data['location'] = soup.find('div', class_='location')
-            job_data['description'] = soup.find('div', id='content')
-        elif 'ashbyhq.com' in url:
-            job_data['source'] = 'ashby'
-            job_data['title'] = soup.find('h2', class_='ashby-job-posting-heading')
-            job_data['company'] = soup.find('div', class_='ashby-company-name')
-            job_data['location'] = soup.find('div', class_='ashby-job-posting-location')
-            job_data['description'] = soup.find('div', class_='ashby-job-posting-description')
-        elif 'lever.co' in url:
-            job_data['source'] = 'lever'
-            job_data['title'] = soup.find('h2', class_='posting-headline')
-            job_data['company'] = soup.find('div', class_='main-header-text-logo')
-            job_data['location'] = soup.find('div', class_='posting-categories')
-            job_data['description'] = soup.find('div', class_='content')
-        elif 'myworkdayjobs.com' in url:
-            job_data['source'] = 'workday'
-            job_data['title'] = soup.find('h2', {'data-automation-id': 'jobPostingHeader'})
-            job_data['location'] = soup.find('div', {'data-automation-id': 'locations'})
-            job_data['description'] = soup.find('div', {'data-automation-id': 'jobPostingDescription'})
-            company_match = url.split('//')[1].split('.')[0]
-            job_data['company'] = company_match.replace('-', ' ').title()
-        else:
-            job_data['source'] = 'generic'
-            job_data['title'] = soup.find('h1') or soup.find('h2')
-            job_data['description'] = soup.find('div', class_='description') or soup.find('div', class_='content')
-        
-        # Convert to text
-        for field in ['title', 'company', 'location', 'description']:
-            if job_data.get(field) and hasattr(job_data[field], 'get_text'):
-                job_data[field] = job_data[field].get_text(strip=True)
-        
-        if not job_data.get('title') or not job_data.get('description'):
+        parts = url.rstrip('/').split('/')
+        job_id = parts[-1].split('?')[0]  # strip query params
+        # Company slug is between greenhouse.io/ and /jobs/
+        gh_index = next(i for i, p in enumerate(parts) if 'greenhouse.io' in p)
+        company_slug = parts[gh_index + 1]
+
+        api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs/{job_id}"
+        resp = requests.get(api_url, timeout=10)
+
+        if resp.status_code != 200:
             return None
-        
-        return job_data
-        
+
+        data = resp.json()
+        # Strip HTML tags from content
+        content_html = data.get('content', '')
+        description = BeautifulSoup(content_html, 'html.parser').get_text(separator=' ', strip=True)
+
+        return {
+            'title': data.get('title', ''),
+            'company': data.get('company_name', company_slug.replace('-', ' ').title()),
+            'location': data.get('location', {}).get('name', ''),
+            'description': description,
+            'source': 'greenhouse',
+        }
+    except Exception as e:
+        print(f"  Greenhouse API error: {e}")
+        return None
+
+
+def _extract_ashby(url: str) -> Optional[Dict]:
+    """Extract job details via Ashby GraphQL API."""
+    # URL format: https://jobs.ashbyhq.com/{org}/{job_id}
+    try:
+        parts = url.rstrip('/').split('/')
+        # Handle /application suffix
+        if parts[-1] == 'application':
+            parts = parts[:-1]
+        org_slug = parts[-2]
+        job_id = parts[-1].split('?')[0]
+
+        api_url = 'https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting'
+        payload = {
+            'operationName': 'ApiJobPosting',
+            'variables': {
+                'organizationHostedJobsPageName': org_slug,
+                'jobPostingId': job_id,
+            },
+            'query': '''query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) {
+                jobPosting(organizationHostedJobsPageName: $organizationHostedJobsPageName, jobPostingId: $jobPostingId) {
+                    id title descriptionHtml locationName
+                }
+            }'''
+        }
+        resp = requests.post(api_url, json=payload, headers={'Content-Type': 'application/json'}, timeout=10)
+
+        if resp.status_code != 200:
+            return None
+
+        posting = resp.json().get('data', {}).get('jobPosting')
+        if not posting:
+            return None
+
+        description = BeautifulSoup(posting.get('descriptionHtml', ''), 'html.parser').get_text(separator=' ', strip=True)
+
+        return {
+            'title': posting.get('title', ''),
+            'company': org_slug.replace('-', ' ').title(),
+            'location': posting.get('locationName', ''),
+            'description': description,
+            'source': 'ashby',
+        }
+    except Exception as e:
+        print(f"  Ashby API error: {e}")
+        return None
+
+
+def _extract_lever(url: str) -> Optional[Dict]:
+    """Extract job details from Lever (server-rendered HTML)."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
+        # Strip /apply suffix for the posting page
+        clean_url = url.split('/apply')[0]
+        resp = requests.get(clean_url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, 'html.parser')
+
+        # Title is an h2 inside div.posting-headline, or a standalone h2
+        headline_div = soup.find('div', class_='posting-headline')
+        title_el = headline_div.find('h2') if headline_div else soup.find('h2')
+        title = title_el.get_text(strip=True) if title_el else None
+
+        # Company from URL path: jobs.lever.co/{company}/...
+        url_parts = clean_url.split('/')
+        company_slug = url_parts[3] if len(url_parts) > 3 else ''
+        company = company_slug.replace('-', ' ').title()
+
+        # Location from posting-categories
+        location_el = soup.find('div', class_='location')
+        location = location_el.get_text(strip=True) if location_el else ''
+
+        # Description from the content sections
+        content = soup.find('div', class_='content')
+        description = content.get_text(separator=' ', strip=True) if content else ''
+
+        return {
+            'title': title or '',
+            'company': company or '',
+            'location': location,
+            'description': description,
+            'source': 'lever',
+        }
+    except Exception as e:
+        print(f"  Lever parse error: {e}")
+        return None
+
+
+def _extract_html_generic(url: str) -> Optional[Dict]:
+    """Generic HTML extraction for Workday, Jobvite, SmartRecruiters, iCIMS, etc."""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.content, 'html.parser')
+
+        title = None
+        company = None
+        location = None
+        description = None
+        source = 'generic'
+
+        if 'myworkdayjobs.com' in url:
+            source = 'workday'
+            title_el = soup.find('h2', {'data-automation-id': 'jobPostingHeader'})
+            title = title_el.get_text(strip=True) if title_el else None
+            loc_el = soup.find('div', {'data-automation-id': 'locations'})
+            location = loc_el.get_text(strip=True) if loc_el else ''
+            desc_el = soup.find('div', {'data-automation-id': 'jobPostingDescription'})
+            description = desc_el.get_text(separator=' ', strip=True) if desc_el else ''
+            company_match = url.split('//')[1].split('.')[0]
+            company = company_match.replace('-', ' ').title()
+        elif 'smartrecruiters.com' in url:
+            source = 'smartrecruiters'
+            # SmartRecruiters is JS-rendered; extract from <title> and URL
+            # URL format: jobs.smartrecruiters.com/{Company}/{id}-{title}
+            title_tag = soup.find('title')
+            page_title = title_tag.get_text(strip=True) if title_tag else ''
+            # Title tag format: "Job Title | SmartRecruiters"
+            title = page_title.split('|')[0].strip() if '|' in page_title else page_title
+            url_parts = url.split('/')
+            company = url_parts[3] if len(url_parts) > 3 else ''
+            company = company.replace('-', ' ')
+            # Get whatever text is on the page for description
+            body_text = soup.get_text(separator=' ', strip=True)
+            description = body_text[:3000] if body_text else ''
+        else:
+            title_el = soup.find('h1') or soup.find('h2')
+            title = title_el.get_text(strip=True) if title_el else None
+            desc_el = soup.find('div', class_='description') or soup.find('div', class_='content')
+            description = desc_el.get_text(separator=' ', strip=True) if desc_el else ''
+
+            if 'jobvite.com' in url:
+                source = 'jobvite'
+            elif 'icims.com' in url:
+                source = 'icims'
+
+        return {
+            'title': title or '',
+            'company': company or '',
+            'location': location or '',
+            'description': description or '',
+            'source': source,
+        }
+    except Exception as e:
+        print(f"  HTML parse error: {e}")
+        return None
+
+
+def extract_job_details(url: str) -> Optional[Dict]:
+    """
+    Extract job details from ATS platform URL.
+    Uses platform-specific APIs where available (Greenhouse, Ashby),
+    falls back to HTML parsing for others (Lever, Workday, etc.).
+    """
+    try:
+        # Route to the best extraction method per platform
+        if 'greenhouse.io' in url:
+            result = _extract_greenhouse(url)
+        elif 'ashbyhq.com' in url:
+            result = _extract_ashby(url)
+        elif 'lever.co' in url:
+            result = _extract_lever(url)
+        else:
+            result = _extract_html_generic(url)
+
+        if not result or not result.get('title'):
+            return None
+
+        # Add common fields
+        result['job_url'] = url
+        result['url_hash'] = hashlib.md5(url.encode()).hexdigest()
+        result['scraped_at'] = datetime.now().isoformat()
+
+        return result
+
     except Exception as e:
         print(f"Error extracting {url}: {e}")
         return None
 
 
 def get_or_create_company(client, company_name: str) -> Optional[Dict]:
-    """Get or create company with sponsorship data."""
+    """Get or create company, linking to DOL sponsorship data via fuzzy match."""
     if not company_name:
         return None
-    
+
     normalized_name = company_name.strip().upper()
+
+    # 1. Try exact match (uppercase)
     existing = client.get_company_by_name(normalized_name)
     if existing:
         return existing
-    
+
+    # 2. Try exact match (original case)
     existing = client.get_company_by_name(company_name)
     if existing:
         return existing
-    
+
+    # 3. Fuzzy match: search DOL data for companies starting with this name
+    #    e.g., "Visa" → "VISA TECHNOLOGY & OPERATIONS LLC" (563 approvals)
+    try:
+        result = client.client.table("companies").select(
+            "id, employer_name, total_approvals, approval_rate"
+        ).ilike("employer_name", f"{normalized_name}%").gt(
+            "total_approvals", 0
+        ).order("total_approvals", desc=True).limit(1).execute()
+
+        if result.data:
+            return result.data[0]
+    except Exception:
+        pass
+
+    # 4. No match found — create new entry
     company_data = {
         'employer_name': company_name,
         'total_approvals': 0,

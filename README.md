@@ -1,293 +1,251 @@
-# Intelligent Sponsored Jobs Search Agent
+# sponsored-jobs-rag-bot
 
-MCP-based job search system using LangChain and Groq's Llama-3.1-8B-Instant for semantic job matching against resume embeddings. Leverages DOL H-1B/PERM/LCA data to filter companies by visa sponsorship history.
+Automated job discovery pipeline that scrapes ATS platforms daily, scores listings against your resume using a two-stage RAG pipeline (pgvector + Llama-3), and cross-references each employer against 18K+ companies from DOL H-1B/PERM/LCA filings to surface visa sponsorship likelihood. Runs entirely on free-tier infrastructure.
+
+## How it works
+
+```
+ GitHub Actions (cron: 9 AM EST daily)
+ ├─ scrape-newgrad-jobs ──┐
+ ├─ scrape-midlevel-jobs ─┤
+ │                        ▼
+ │                   match-jobs ──► send-notifications
+ │
+ └─ Pipeline per job:
+     1. SerpAPI → ATS URLs (Greenhouse, Lever, Ashby, Workday, SmartRecruiters)
+     2. Platform-specific extraction (JSON APIs where available, HTML fallback)
+     3. Embed job text → 384-dim vector (all-MiniLM-L6-v2)
+     4. Store in Supabase (pgvector)
+     5. Cosine similarity vs. resume embedding → top 50 candidates
+     6. Groq Llama-3.1-8B-Instant rescoring → top 20 with reasoning
+     7. Fuzzy-match employer → DOL sponsorship data (approval rate, history)
+     8. Email digest: ranked matches with scores + sponsorship stats
+```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     GITHUB ACTIONS (Scheduler)                  │
-│  ┌──────────────┐      ┌──────────────┐      ┌──────────────┐  │
-│  │ Daily 9 AM   │      │ Daily 6 PM   │      │  On-demand   │  │
-│  │ Scrape Jobs  │      │ Match & Rank │      │  Manual Run  │  │
-│  └──────────────┘      └──────────────┘      └──────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-           │                       │                      │
-           ▼                       ▼                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        MCP SERVER (FastMCP)                     │
-│  Tools Exposed:                                                 │
-│  • search_jobs(query, location, sponsorship_filter)             │
-│  • ingest_job_posting(url, company_name, title)                 │
-│  • match_resume(job_ids, resume_embedding)                      │
-│  • score_relevance(job_id, resume_text) → 0-100                 │
-└─────────────────────────────────────────────────────────────────┘
-           │                       │
-           ▼                       ▼
-┌──────────────────┐    ┌──────────────────────────────────┐
-│  SerpAPI Google  │    │  Supabase (pgvector)             │
-│  Search          │    │  • companies (15K+ H1B sponsors) │
-│  • LinkedIn Jobs │    │  • jobs (embeddings)             │
-│  • Indeed        │    │  • user_resume (embedding)       │
-│  • Glassdoor     │    │  • job_matches (scores)          │
-└──────────────────┘    └──────────────────────────────────┘
-           │                       │
-           └───────────┬───────────┘
-                       ▼
-           ┌───────────────────────┐
-           │  LangChain Agent       │
-           │  (Groq Llama-3.1-8B)   │
-           │  • Orchestrates tools  │
-           │  • Scores relevance    │
-           │  • Generates summaries │
-           └───────────────────────┘
-                       │
-                       ▼
-           ┌───────────────────────┐
-           │  Email Notifier        │
-           │  • Top 10 matches/day  │
-           │  • >80% relevance only │
-           │  • Gmail SMTP          │
-           └───────────────────────┘
+etl/
+├── scrape_jobs.py              # 3-tier search: SerpAPI → Google CSE → Selenium
+├── process_sponsorship_data.py # DOL H-1B/PERM/LCA ETL → companies table
+└── search_queries.yaml         # Site-scoped Google dorks per experience level
+
+rag/
+├── embedding_service.py        # sentence-transformers wrapper (MiniLM-L6-v2)
+├── match_jobs.py               # Vector search + LLM rescoring pipeline
+└── llama_scorer.py             # Local scorer (deprecated, replaced by Groq)
+
+agents/
+├── groq_client.py              # Groq API client w/ retry + JSON mode
+├── langchain_agent.py          # ReAct agent (Groq backend)
+├── mcp_server.py               # MCP tool server (search, filter, score, notify)
+└── notifier.py                 # SMTP email digest
+
+utils/
+├── supabase_client.py          # DB client singleton
+├── serpapi_client.py            # SerpAPI wrapper
+├── google_search.py            # Google Custom Search fallback
+└── resume_extractor.py         # Resume text extraction
+
+supabase/
+├── schema.sql                  # 6 tables + indexes + views
+└── rpc_functions.sql           # pgvector match_jobs() RPC
 ```
 
-## Features
+## Data flow
 
-- **Zero-Cost Architecture** - Groq API (30 req/min) + GitHub Actions (2,000 min/month) + Supabase free tier
-- **Sub-Second Inference** - Groq's Llama-3.1-8B-Instant for job relevance scoring
-- **MCP Server** - Standardized tool interfaces for agent orchestration
-- **Semantic Search** - pgvector with 384-dimensional embeddings (all-MiniLM-L6-v2)
-- **Sponsorship Filtering** - DOL H-1B/PERM/LCA data (15,000+ companies, >70% approval rate)
-- **Automated Workflow** - GitHub Actions cron jobs for daily scraping and matching
-- **Smart Notifications** - Email digest with top matches (>80% relevance threshold)
+**Scraping** — `etl/scrape_jobs.py` reads `search_queries.yaml` for site-scoped Google dorks targeting 7 ATS platforms. Extraction is platform-aware:
+
+| Platform | Method | Why |
+|----------|--------|-----|
+| Greenhouse | REST API (`boards-api.greenhouse.io/v1/boards/{co}/jobs/{id}`) | HTML is JS-rendered |
+| Ashby | GraphQL API (`jobs.ashbyhq.com/api/non-user-graphql`) | HTML is JS-rendered |
+| Lever | HTML scraping (`div.posting-headline`, `div.section-wrapper`) | Server-rendered |
+| SmartRecruiters | `<title>` tag + meta extraction | Partial SSR |
+| Workday, iCIMS, Jobvite | Generic HTML fallback | Varies |
+
+**Matching** — `rag/match_jobs.py` runs a two-stage retrieval pipeline:
+1. **Recall**: cosine similarity (pgvector IVFFlat index) between resume and job embeddings → top 50
+2. **Precision**: Groq Llama-3.1-8B-Instant scores each job 0-100 with structured JSON output (`response_format: json_object`) → top 20
+
+**Sponsorship** — `etl/process_sponsorship_data.py` ingests three DOL datasets:
+- H-1B Employer Data Hub (CSV) — initial/continuing approvals & denials by employer
+- PERM Disclosure Data (Excel, ~83MB) — certified/denied/withdrawn cases
+- LCA Disclosure Data (Excel) — certified/denied cases
+
+Aggregated into a `companies` table (18,385 employers with >= 3 total approvals). Jobs are fuzzy-matched to DOL employers via `ILIKE` prefix search, preferring the entry with the highest approval count.
+
+## Database schema
+
+```sql
+companies    -- 18K+ employers: h1b/perm/lca approvals & denials, approval_rate
+jobs         -- scraped listings: title, description, location, url_hash (dedup)
+job_embeddings -- vector(384) per job, IVFFlat cosine index
+user_resume  -- resume text + embedding
+job_matches  -- cosine_similarity, llama_score, reasoning, is_notified
+applications -- tracking (applied, interview, offer, rejected)
+```
+
+`match_jobs()` RPC handles vector similarity search server-side when the dataset is large enough to warrant it.
 
 ## Setup
 
-### 1. Prerequisites
+### Prerequisites
 
 - Python 3.11+
-- Supabase account (free tier)
-- Groq API key (free tier: 30 req/min)
-- GitHub account (for Actions)
+- [Supabase](https://supabase.com) project (free tier)
+- [Groq](https://console.groq.com) API key (free tier: 30 req/min)
+- [SerpAPI](https://serpapi.com) key (100 searches/month free)
 
-### 2. Install Dependencies
+### Install
 
 ```bash
+git clone https://github.com/KarthikSunkari/sponsored-jobs-rag-bot.git
 cd sponsored-jobs-rag-bot
 pip install -r requirements.txt
 ```
 
-### 3. Get Groq API Key
+### Database
 
-1. Sign up at [console.groq.com](https://console.groq.com)
-2. Create a new API key (free tier: 30 requests/min)
-3. Copy the key for next step
+Run both SQL files in Supabase SQL Editor (Settings → SQL Editor):
 
-### 4. Configure Supabase
+```bash
+supabase/schema.sql          # tables, indexes, views, triggers
+supabase/rpc_functions.sql   # match_jobs() vector search RPC
+```
 
-1. Create a new project at [supabase.com](https://supabase.com)
-2. Go to SQL Editor and run `supabase/schema.sql`
-3. Enable pgvector extension:
-   ```sql
-   CREATE EXTENSION IF NOT EXISTS vector;
-   ```
-4. Copy your project URL and API keys
-
-### 5. Environment Variables
+### Environment
 
 ```bash
 cp .env.example .env
-# Edit .env with:
-# - Supabase URL and keys
-# - Groq API key
-# - GitHub token (for Actions)
 ```
 
-### 6. Process Sponsorship Data
+Required variables:
+
+```
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=eyJ...
+GROQ_API_KEY=gsk_...
+SERPAPI_KEY=...
+```
+
+Optional (for email notifications):
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=xxxx-xxxx-xxxx-xxxx   # Gmail app password
+NOTIFICATION_EMAIL=you@gmail.com
+```
+
+### Load sponsorship data
+
+Download DOL datasets and place them in the parent directory:
 
 ```bash
-# Process H-1B, PERM, and LCA data and upload to Supabase
+# Expected files (parent of repo root):
+../h1b_datahubexport-2023.csv
+../PERM_Disclosure_Data_FY2025_Q4.xlsx
+../LCA_Disclosure_Data_FY2025_Q1.xlsx
+
 python etl/process_sponsorship_data.py
+# → 73,975 total employers processed
+# → 18,385 quality employers uploaded (>= 3 approvals)
 ```
 
-Expected output:
-```
-Processing H-1B data...
-Processed 33,334 unique companies from H-1B data
-Processing PERM data...
-Processing LCA data...
-Filtered to 15,000+ quality companies (>=3 approvals)
-Successfully uploaded to Supabase
-```
-
-### 7. Upload Your Resume
+### Upload resume
 
 ```python
 from utils.supabase_client import get_supabase_client
 
 client = get_supabase_client()
 client.client.table("user_resume").insert({
-    "resume_text": "Your resume text here...",
-    "skills": ["Python", "Machine Learning", "etc"],
-    "experience_years": 5
+    "resume_text": "Your full resume text...",
+    "skills": ["Python", "Distributed Systems", "AWS"],
+    "experience_years": 3
 }).execute()
 ```
 
-### 8. Configure GitHub Actions
+### GitHub Actions secrets
 
-1. Go to your GitHub repo → Settings → Secrets and variables → Actions
-2. Add secrets:
-   - `SUPABASE_URL`
-   - `SUPABASE_KEY`
-   - `SUPABASE_SERVICE_KEY`
-   - `GROQ_API_KEY`
-   - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `NOTIFICATION_EMAIL`
-3. Workflows will run automatically (daily at 9 AM and 6 PM EST)
+Go to repo Settings → Secrets and variables → Actions. Add:
 
-### 9. Test the System
-
-```bash
-# Test Groq API connection
-python agents/groq_client.py
-
-# Test MCP server
-python agents/mcp_server.py
-
-# Test LangChain agent
-python agents/langchain_agent.py
-
-# Run job matching manually
-python rag/match_jobs.py
-```
+| Secret | Required |
+|--------|----------|
+| `SUPABASE_URL` | Yes |
+| `SUPABASE_KEY` | Yes |
+| `SUPABASE_SERVICE_KEY` | Yes |
+| `GROQ_API_KEY` | Yes |
+| `SERPAPI_KEY` | Yes |
+| `GOOGLE_SEARCH_API_KEY` | For Tier 2 fallback |
+| `GOOGLE_SEARCH_ENGINE_ID` | For Tier 2 fallback |
+| `SMTP_HOST` | For notifications |
+| `SMTP_PORT` | For notifications |
+| `SMTP_USER` | For notifications |
+| `SMTP_PASSWORD` | For notifications |
+| `NOTIFICATION_EMAIL` | For notifications |
 
 ## Usage
 
-### Daily Workflow (Automated)
+### Automated (GitHub Actions)
 
-1. **GitHub Actions scrapes jobs** (9 AM EST)
-   - Fetches from LinkedIn, Indeed, Glassdoor via SerpAPI
-   - Filters by sponsorship companies (DOL LCA data)
-   - Stores in Supabase
-   - Generates embeddings automatically
+The `daily-jobs.yml` workflow runs at 9 AM EST:
 
-2. **GitHub Actions matches jobs** (6 PM EST)
-   - Retrieves new jobs from Supabase
-   - Performs vector similarity search (pgvector)
-   - Scores top matches with Groq Llama-3
-   - Sends email notification with top matches
+1. **scrape-newgrad-jobs** — scrapes up to 25 new grad listings (parallel)
+2. **scrape-midlevel-jobs** — scrapes up to 25 mid-level listings (parallel)
+3. **match-jobs** — vector search + LLM scoring against resume (sequential)
+4. **send-notifications** — email digest of matches scoring >= 80 (sequential)
 
-3. **Manual trigger** (optional)
-   ```bash
-   # Trigger workflows manually from GitHub Actions tab
-   # Or run locally:
-   python rag/match_jobs.py
-   python agents/notifier.py
-   ```
-
-### Manual Commands
+Trigger manually from the Actions tab or via CLI:
 
 ```bash
-# Process new sponsorship data (DOL LCA)
-python etl/process_sponsorship_data.py
+gh workflow run "Daily Job Scraping and Matching"
+```
 
-# Test Groq API connection
+### Local
+
+```bash
+# Scrape jobs
+python etl/scrape_jobs.py --level newgrad --max-jobs 25
+python etl/scrape_jobs.py --level midlevel --max-jobs 25
+
+# Match against resume
+python rag/match_jobs.py
+
+# Send email digest
+python agents/notifier.py
+
+# Test Groq connection
 python agents/groq_client.py
 
 # Test MCP server
 python agents/mcp_server.py
-
-# Test LangChain agent
-python agents/langchain_agent.py
-
-# Match jobs against resume (uses Groq)
-python rag/match_jobs.py
-
-# Send daily digest
-python agents/notifier.py
 ```
 
-## Database Schema
+## Cost
 
-- **companies** - Sponsorship history (H-1B, PERM, LCA)
-- **jobs** - Scraped job listings
-- **job_embeddings** - Vector embeddings (384-dim)
-- **user_resume** - Your resume + embedding
-- **job_matches** - Scored matches (cosine + Llama)
-- **applications** - Application tracking
-
-## Configuration
-
-Edit `.env` to customize:
-
-```bash
-# Matching thresholds
-MIN_RELEVANCE_SCORE=80  # Only notify for scores >= 80
-MAX_DAILY_MATCHES=20    # Top N jobs to score with Llama
-
-# Scraping
-SCRAPE_INTERVAL_HOURS=24
-MIN_JOBS_PER_DAY=50
-```
-
-## Implemented Features
-
-- **Serverless Architecture** - Zero infrastructure management
-- **MCP-Based Orchestration** - Standardized tool interfaces
-- **Sub-Second Inference** - Groq API (<1s per job)
-- **Cloud-Native RAG** - Supabase pgvector for semantic search
-- **Multi-Source Scraping** - GitHub Actions automation
-- **Sponsorship Filtering** - DOL LCA data (>70% approval rate)
-- **Smart Notifications** - Daily digest (>80% relevance)
-- **Application Tracking** - Deduplication and tracking
-
-## Future Enhancements
-
-- AI cover letter generation
-- Company research agent (Glassdoor scraping)
-- Skill gap analysis
-- Auto-apply bot (Playwright)
-- Salary negotiation agent
-- Interview prep generator
+| Service | Free tier | Bottleneck |
+|---------|-----------|------------|
+| Groq | 30 req/min, 14.4K/day | LLM scoring (2s sleep between calls) |
+| GitHub Actions | 2,000 min/month | ~5 min/run × 30 days = 150 min |
+| Supabase | 500MB DB, pgvector | 18K companies + jobs fits comfortably |
+| SerpAPI | 100 searches/month | 2 searches/day × 30 = 60 |
+| sentence-transformers | Local, unlimited | ~3s model load, <50ms/embedding |
+| **Total** | | **$0/month** |
 
 ## Troubleshooting
 
-**Groq API errors:**
-- Verify API key in GitHub Secrets
-- Check rate limits (30 req/min on free tier)
-- Test locally: `python agents/groq_client.py`
+**Supabase 521 error** — Free-tier projects pause after 7 days of inactivity. Restore from the Supabase dashboard.
 
-**Supabase connection error:**
-- Check `.env` credentials
-- Verify pgvector extension is enabled
+**Groq rate limit errors** — The pipeline sleeps 2s between scoring calls. If you're hitting limits, reduce `max_jobs` in the scraper or `MAX_DAILY_MATCHES` in the workflow.
 
-**GitHub Actions not running:**
-- Check workflow permissions in repo settings
-- Verify all secrets are configured
-- Check Actions tab for error logs
+**0% approval rate on all jobs** — Sponsorship data hasn't been loaded. Run `python etl/process_sponsorship_data.py`. The fuzzy matcher requires company names in the `companies` table to link against.
 
-**No jobs found:**
-- Trigger scraping workflow manually
-- Check Supabase `jobs` table
-- Verify sponsorship data is loaded
+**No jobs extracted** — Some ATS platforms (Workday, iCIMS) are fully JS-rendered and may return empty descriptions. Greenhouse and Ashby use API-based extraction and are the most reliable.
 
-## Cost Breakdown
-
-| Component | Free Tier Limits | Cost |
-|-----------|------------------|------|
-| Groq API | 30 req/min, 14,400 req/day | $0 |
-| GitHub Actions | 2,000 minutes/month | $0 |
-| Supabase | 500MB DB + pgvector | $0 |
-| Embeddings (sentence-transformers) | Unlimited (local) | $0 |
-| **Total** | **Plenty for daily use** | **$0/month** |
+**GitHub Actions failing** — Check that all required secrets are configured. The workflow does not install Chrome/Selenium — extraction is API-based.
 
 ## License
 
 MIT
-
-## Contributing
-
-PRs welcome. Focus areas:
-- Additional job board integrations
-- Improved Llama prompts
-- Better email templates
-- Application tracking UI

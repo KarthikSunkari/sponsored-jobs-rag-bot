@@ -2,6 +2,7 @@
 Main job matching pipeline using RAG (pgvector + Llama-3).
 """
 import sys
+import time
 from pathlib import Path
 from typing import List, Dict, Optional
 from tqdm import tqdm
@@ -124,12 +125,15 @@ def score_with_llama(
                 job_description=job.get("description", ""),
                 company=job.get("companies", {}).get("employer_name", "")
             )
-            
+
             job["llama_score"] = result["score"]
             job["llama_reasoning"] = result["reasoning"]
             job["key_matches"] = result.get("key_matches", [])
             scored_jobs.append(job)
-            
+
+            # Respect Groq free tier rate limit (30 req/min)
+            time.sleep(2)
+
         except Exception as e:
             print(f"Error scoring job {job.get('id')}: {e}")
             continue
