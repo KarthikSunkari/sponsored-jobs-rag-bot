@@ -65,8 +65,8 @@ supabase/
 | Workday, iCIMS, Jobvite | Generic HTML fallback | Varies |
 
 **Matching** — `rag/match_jobs.py` runs a two-stage retrieval pipeline:
-1. **Recall**: cosine similarity (pgvector IVFFlat index) between resume and job embeddings → top 50
-2. **Precision**: Groq GPT-OSS 20B scores each job 0-100 with structured JSON output (`response_format: json_object`) → top 20
+1. **Recall**: cosine similarity (pgvector IVFFlat index) between resume and job embeddings at configurable `MATCH_THRESHOLD` (default `0.40`) → top 50
+2. **Precision**: Groq GPT-OSS 20B scores each job 0-100 with structured JSON output (`response_format: json_object`) → top 20. Provider failures are deferred instead of being stored as zero-score matches.
 
 **Sponsorship** — `etl/process_sponsorship_data.py` ingests three DOL datasets:
 - H-1B Employer Data Hub (CSV) — initial/continuing approvals & denials by employer
@@ -266,7 +266,7 @@ python agents/mcp_server.py
 
 **Supabase 521 error** — Free-tier projects pause after 7 days of inactivity. Restore from the Supabase dashboard.
 
-**Groq rate limit errors** — The pipeline sleeps 2s between scoring calls. If you're hitting limits, reduce `max_jobs` in the scraper or `MAX_DAILY_MATCHES` in the workflow.
+**Groq rate limit errors** — The pipeline sleeps 2.5s between scoring calls by default. Tune `GROQ_REQUEST_DELAY_SECONDS` or reduce `MAX_DAILY_MATCHES` if your model-specific limits are lower.
 
 **0% approval rate on all jobs** — Sponsorship data hasn't been loaded. Run `python etl/process_sponsorship_data.py`. The fuzzy matcher requires company names in the `companies` table to link against.
 

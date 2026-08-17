@@ -105,7 +105,8 @@ class SupabaseClient:
     def search_similar_jobs(
         self, 
         resume_embedding: List[float], 
-        limit: int = 50
+        limit: int = 50,
+        threshold: float = 0.4,
     ) -> List[Dict]:
         """Search for similar jobs using vector similarity."""
         try:
@@ -114,7 +115,7 @@ class SupabaseClient:
                 "match_jobs",
                 {
                     "query_embedding": resume_embedding,
-                    "match_threshold": 0.5,
+                    "match_threshold": threshold,
                     "match_count": limit
                 }
             ).execute()

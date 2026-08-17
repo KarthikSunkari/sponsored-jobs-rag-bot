@@ -6,7 +6,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent.parent))
@@ -36,12 +36,20 @@ def get_resume_profiles(profile_name: Optional[str] = None) -> List[Dict]:
         return []
 
 
-def find_similar_jobs(resume_embedding: List[float], limit: int = 50) -> List[Dict]:
+def find_similar_jobs(
+    resume_embedding: List[float],
+    limit: int = 50,
+    threshold: float = 0.4,
+) -> List[Dict]:
     """Find similar jobs using vector similarity search."""
     client = get_supabase_client()
 
     try:
-        top_jobs = client.search_similar_jobs(resume_embedding, limit=limit)
+        top_jobs = client.search_similar_jobs(
+            resume_embedding,
+            limit=limit,
+            threshold=threshold,
+        )
         if not top_jobs:
             print("No job embeddings found above the similarity threshold")
             return []
@@ -69,10 +77,12 @@ def score_with_llama(
     resume_text: str,
     jobs: List[Dict],
     max_jobs: int = 20
-) -> List[Dict]:
+) -> Tuple[List[Dict], int]:
     """Score top jobs with Llama-3 via Groq API."""
     scorer = GroqClient()
     scored_jobs = []
+    failed_count = 0
+    request_delay = float(os.getenv("GROQ_REQUEST_DELAY_SECONDS", "2.5"))
     
     print(f"Scoring top {min(len(jobs), max_jobs)} jobs with Groq...")
     
@@ -85,13 +95,22 @@ def score_with_llama(
                 company=job.get("companies", {}).get("employer_name", "")
             )
 
+            if not result.get("success", True):
+                failed_count += 1
+                error = result.get("error", "unknown scoring error")
+                print(
+                    f"Deferred job {job.get('id')} ({job.get('title', 'untitled')}) "
+                    f"for retry: {error[:160]}"
+                )
+                continue
+
             job["llama_score"] = result["score"]
             job["llama_reasoning"] = result["reasoning"]
             job["key_matches"] = result.get("key_matches", [])
             scored_jobs.append(job)
 
-            # Respect Groq free tier rate limit (30 req/min)
-            time.sleep(2)
+            # Leave headroom for retries within provider rate limits.
+            time.sleep(request_delay)
 
         except Exception as e:
             print(f"Error scoring job {job.get('id')}: {e}")
@@ -100,7 +119,7 @@ def score_with_llama(
     # Sort by Llama score
     scored_jobs.sort(key=lambda x: x.get("llama_score", 0), reverse=True)
     
-    return scored_jobs
+    return scored_jobs, failed_count
 
 
 def save_matches(resume_id: int, scored_jobs: List[Dict]) -> int:
@@ -157,8 +176,22 @@ def match_resume_profile(resume: Dict) -> bool:
     
     # 2. Find similar jobs
     print("\n[2/5] Finding similar jobs using vector search...")
-    similar_jobs = find_similar_jobs(resume_embedding, limit=50)
-    print(f"Found {len(similar_jobs)} similar jobs")
+    match_threshold = float(os.getenv("MATCH_THRESHOLD", "0.4"))
+    similar_jobs = find_similar_jobs(
+        resume_embedding,
+        limit=50,
+        threshold=match_threshold,
+    )
+    print(
+        f"Retrieval results: {len(similar_jobs)} candidates "
+        f"at similarity >= {match_threshold:.2f}"
+    )
+    if similar_jobs:
+        similarities = [job.get("cosine_similarity", 0) for job in similar_jobs]
+        print(
+            f"Similarity range: {min(similarities):.3f} to "
+            f"{max(similarities):.3f}"
+        )
     
     if not similar_jobs:
         print("No jobs found. Make sure jobs are scraped and embedded.")
@@ -167,8 +200,15 @@ def match_resume_profile(resume: Dict) -> bool:
     # 3. Score with Llama
     print("\n[3/5] Scoring jobs with Groq...")
     max_jobs = int(os.getenv("MAX_DAILY_MATCHES", "20"))
-    scored_jobs = score_with_llama(resume_text, similar_jobs, max_jobs=max_jobs)
-    print(f"Scored {len(scored_jobs)} jobs")
+    scored_jobs, failed_count = score_with_llama(
+        resume_text,
+        similar_jobs,
+        max_jobs=max_jobs,
+    )
+    print(
+        f"Scoring results: {len(scored_jobs)} succeeded, "
+        f"{failed_count} deferred for retry"
+    )
     
     # 4. Save matches
     print("\n[4/5] Saving matches to database...")

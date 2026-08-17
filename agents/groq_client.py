@@ -101,7 +101,7 @@ class GroqClient:
             company: Company name
             
         Returns:
-            Dict with score (0-100), reasoning, and key_matches
+            Dict with success status, score, reasoning, and key matches.
         """
         system_prompt = """You are an expert job matching AI. You MUST respond with ONLY a valid JSON object, no other text.
 Return exactly this format:
@@ -125,11 +125,14 @@ Rate this job's relevance to the resume (0-100). Focus on:
 Respond with ONLY a JSON object."""
 
         try:
+            max_completion_tokens = int(
+                os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1024")
+            )
             response = self.generate(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=0.1,  # Low temperature for consistent JSON output
-                max_tokens=512,
+                max_tokens=max_completion_tokens,
                 response_format={"type": "json_object"}
             )
             
@@ -149,17 +152,21 @@ Respond with ONLY a JSON object."""
                 result = json.loads(response.strip())
             
             return {
+                "success": True,
                 "score": int(result.get("score", 0)),
                 "reasoning": result.get("reasoning", ""),
-                "key_matches": result.get("key_matches", [])
+                "key_matches": result.get("key_matches", []),
+                "error": None,
             }
             
         except Exception as e:
-            # Return default values on error
+            # Do not turn a temporary provider failure into a real zero score.
             return {
-                "score": 0,
-                "reasoning": f"Scoring error: {str(e)[:50]}",
-                "key_matches": []
+                "success": False,
+                "score": None,
+                "reasoning": "",
+                "key_matches": [],
+                "error": str(e),
             }
     
     def test_connection(self) -> bool:
