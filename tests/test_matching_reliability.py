@@ -16,6 +16,22 @@ def test_provider_failure_is_not_converted_to_zero_score():
     assert "temporary provider error" in result["error"]
 
 
+def test_retry_wait_honors_provider_guidance():
+    client = GroqClient.__new__(GroqClient)
+    client.retry_delay = 1.0
+
+    error = Exception("Rate limited. Please try again in 4.335s.")
+
+    assert client._retry_wait_seconds(error, attempt=0) == 4.835
+
+
+def test_retry_wait_uses_exponential_fallback():
+    client = GroqClient.__new__(GroqClient)
+    client.retry_delay = 1.0
+
+    assert client._retry_wait_seconds(Exception("bad JSON"), attempt=1) == 2.0
+
+
 def test_failed_scores_are_deferred_instead_of_saved_as_results():
     scorer = MagicMock()
     scorer.score_job_relevance.side_effect = [

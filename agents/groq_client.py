@@ -4,6 +4,7 @@ Replaces local llama.cpp with cloud-based inference (FREE tier: 30 req/min).
 """
 
 import os
+import re
 import time
 from typing import Optional, Dict, Any
 from groq import Groq
@@ -39,6 +40,32 @@ class GroqClient:
         self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+
+    def _retry_wait_seconds(self, error: Exception, attempt: int) -> float:
+        """Honor provider retry guidance while retaining exponential backoff."""
+        fallback = self.retry_delay * (attempt + 1)
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", {}) or {}
+
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                return min(60.0, max(fallback, float(retry_after) + 0.5))
+            except (TypeError, ValueError):
+                pass
+
+        match = re.search(
+            r"try again in\s+([0-9.]+)\s*(ms|s)",
+            str(error),
+            re.IGNORECASE,
+        )
+        if match:
+            suggested = float(match.group(1))
+            if match.group(2).lower() == "ms":
+                suggested /= 1000
+            return min(60.0, max(fallback, suggested + 0.5))
+
+        return fallback
         
     def generate(
         self,
@@ -79,8 +106,12 @@ class GroqClient:
                 
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    print(f"Groq API error (attempt {attempt + 1}/{self.max_retries}): {e}")
-                    time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
+                    wait_seconds = self._retry_wait_seconds(e, attempt)
+                    print(
+                        f"Groq API error (attempt {attempt + 1}/{self.max_retries}); "
+                        f"retrying in {wait_seconds:.1f}s: {e}"
+                    )
+                    time.sleep(wait_seconds)
                 else:
                     raise Exception(f"Groq API failed after {self.max_retries} attempts: {e}")
     
