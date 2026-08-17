@@ -4,6 +4,7 @@ Replaces local llama.cpp with cloud-based inference (FREE tier: 30 req/min).
 """
 
 import os
+import re
 import time
 from typing import Optional, Dict, Any
 from groq import Groq
@@ -39,6 +40,32 @@ class GroqClient:
         self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+
+    def _retry_wait_seconds(self, error: Exception, attempt: int) -> float:
+        """Honor provider retry guidance while retaining exponential backoff."""
+        fallback = self.retry_delay * (attempt + 1)
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", {}) or {}
+
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                return min(60.0, max(fallback, float(retry_after) + 0.5))
+            except (TypeError, ValueError):
+                pass
+
+        match = re.search(
+            r"try again in\s+([0-9.]+)\s*(ms|s)",
+            str(error),
+            re.IGNORECASE,
+        )
+        if match:
+            suggested = float(match.group(1))
+            if match.group(2).lower() == "ms":
+                suggested /= 1000
+            return min(60.0, max(fallback, suggested + 0.5))
+
+        return fallback
         
     def generate(
         self,
@@ -79,8 +106,12 @@ class GroqClient:
                 
             except Exception as e:
                 if attempt < self.max_retries - 1:
-                    print(f"Groq API error (attempt {attempt + 1}/{self.max_retries}): {e}")
-                    time.sleep(self.retry_delay * (attempt + 1))  # Exponential backoff
+                    wait_seconds = self._retry_wait_seconds(e, attempt)
+                    print(
+                        f"Groq API error (attempt {attempt + 1}/{self.max_retries}); "
+                        f"retrying in {wait_seconds:.1f}s: {e}"
+                    )
+                    time.sleep(wait_seconds)
                 else:
                     raise Exception(f"Groq API failed after {self.max_retries} attempts: {e}")
     
@@ -101,7 +132,7 @@ class GroqClient:
             company: Company name
             
         Returns:
-            Dict with score (0-100), reasoning, and key_matches
+            Dict with success status, score, reasoning, and key matches.
         """
         system_prompt = """You are an expert job matching AI. You MUST respond with ONLY a valid JSON object, no other text.
 Return exactly this format:
@@ -125,11 +156,14 @@ Rate this job's relevance to the resume (0-100). Focus on:
 Respond with ONLY a JSON object."""
 
         try:
+            max_completion_tokens = int(
+                os.getenv("GROQ_MAX_COMPLETION_TOKENS", "1024")
+            )
             response = self.generate(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 temperature=0.1,  # Low temperature for consistent JSON output
-                max_tokens=512,
+                max_tokens=max_completion_tokens,
                 response_format={"type": "json_object"}
             )
             
@@ -149,17 +183,21 @@ Respond with ONLY a JSON object."""
                 result = json.loads(response.strip())
             
             return {
+                "success": True,
                 "score": int(result.get("score", 0)),
                 "reasoning": result.get("reasoning", ""),
-                "key_matches": result.get("key_matches", [])
+                "key_matches": result.get("key_matches", []),
+                "error": None,
             }
             
         except Exception as e:
-            # Return default values on error
+            # Do not turn a temporary provider failure into a real zero score.
             return {
-                "score": 0,
-                "reasoning": f"Scoring error: {str(e)[:50]}",
-                "key_matches": []
+                "success": False,
+                "score": None,
+                "reasoning": "",
+                "key_matches": [],
+                "error": str(e),
             }
     
     def test_connection(self) -> bool:
