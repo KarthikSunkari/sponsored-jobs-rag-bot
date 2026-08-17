@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from utils.supabase_client import get_supabase_client
+from utils.job_location import assess_us_job_location
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -136,6 +137,21 @@ def send_daily_digest():
     # Get unnotified matches with score >= 80
     min_score = int(os.getenv("MIN_RELEVANCE_SCORE", "80"))
     matches = client.get_unnotified_matches(min_score=min_score)
+
+    eligible_matches = []
+    for match in matches:
+        eligible, reason = assess_us_job_location(
+            match.get("location", ""),
+            match.get("description", ""),
+        )
+        if eligible:
+            eligible_matches.append(match)
+        else:
+            print(
+                f"Skipping non-US notification: {match.get('title', 'Untitled')} "
+                f"({match.get('location', 'unknown')}) — {reason}"
+            )
+    matches = eligible_matches
     
     if not matches:
         print("No new high-quality matches to notify.")

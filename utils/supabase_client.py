@@ -142,7 +142,24 @@ class SupabaseClient:
             result = self.client.table("active_matches").select("*").eq(
                 "is_notified", False
             ).gte("llama_score", min_score).execute()
-            return result.data
+            matches = result.data or []
+
+            # active_matches intentionally stays compact, but notification
+            # eligibility also needs the full description for multi-country
+            # postings whose short location label is incomplete.
+            job_ids = list({match["job_id"] for match in matches if match.get("job_id")})
+            if job_ids:
+                jobs_result = self.client.table("jobs").select(
+                    "id,description"
+                ).in_("id", job_ids).execute()
+                descriptions = {
+                    job["id"]: job.get("description", "")
+                    for job in (jobs_result.data or [])
+                }
+                for match in matches:
+                    match["description"] = descriptions.get(match.get("job_id"), "")
+
+            return matches
         except Exception as e:
             print(f"Error fetching unnotified matches: {e}")
             return []
