@@ -79,3 +79,24 @@ def test_vector_threshold_is_forwarded_to_rpc():
             "match_count": 25,
         },
     )
+
+
+def test_notification_matches_are_hydrated_with_job_descriptions():
+    wrapper = SupabaseClient.__new__(SupabaseClient)
+    wrapper.client = MagicMock()
+    matches_query = MagicMock()
+    jobs_query = MagicMock()
+    wrapper.client.table.side_effect = [matches_query, jobs_query]
+    matches_query.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"id": 10, "job_id": 7, "location": "Remote - India"}
+    ]
+    jobs_query.select.return_value.in_.return_value.execute.return_value.data = [
+        {
+            "id": 7,
+            "description": "Available in the United States and India.",
+        }
+    ]
+
+    matches = wrapper.get_unnotified_matches()
+
+    assert matches[0]["description"] == "Available in the United States and India."

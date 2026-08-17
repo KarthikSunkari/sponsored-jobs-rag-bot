@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
 from agents.groq_client import GroqClient
+from utils.job_location import assess_us_job_location
 
 
 def get_resume_profiles(profile_name: Optional[str] = None) -> List[Dict]:
@@ -61,11 +62,26 @@ def find_similar_jobs(
 
         jobs_by_id = {job["id"]: job for job in jobs_result.data}
         jobs_with_scores = []
+        excluded_locations = []
         for match in top_jobs:
             job = jobs_by_id.get(match["job_id"])
             if job:
+                eligible, reason = assess_us_job_location(
+                    job.get("location", ""),
+                    job.get("description", ""),
+                )
+                if not eligible:
+                    excluded_locations.append(
+                        f"{job.get('title', 'Untitled')} ({job.get('location', 'unknown')})"
+                    )
+                    continue
                 job["cosine_similarity"] = float(match["similarity"])
                 jobs_with_scores.append(job)
+        if excluded_locations:
+            print(
+                f"Location filter excluded {len(excluded_locations)} non-US-only "
+                f"candidate(s): {'; '.join(excluded_locations)}"
+            )
         return jobs_with_scores
 
     except Exception as e:

@@ -20,6 +20,7 @@ from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
 from utils.serpapi_client import get_serpapi_client
 from utils.google_search import get_google_search_client
+from utils.job_location import assess_us_job_location
 
 # Import Selenium components (only used as fallback)
 try:
@@ -588,7 +589,17 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True) -> int:
     for url in tqdm(job_urls[:max_jobs * 2], desc="Extracting"):
         job_data = extract_job_details(url)
         if job_data:
-            jobs.append(job_data)
+            eligible, reason = assess_us_job_location(
+                job_data.get("location", ""),
+                job_data.get("description", ""),
+            )
+            if eligible:
+                jobs.append(job_data)
+            else:
+                print(
+                    f"  🌎 Skipped non-US role: {job_data.get('title', 'Untitled')} "
+                    f"({job_data.get('location', 'unknown')}) — {reason}"
+                )
         time.sleep(1)
         
         if len(jobs) >= max_jobs:
