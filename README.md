@@ -1,6 +1,6 @@
 # sponsored-jobs-rag-bot
 
-Automated job discovery pipeline that scrapes ATS platforms daily, scores listings against your resume using a two-stage RAG pipeline (pgvector + Llama-3), and cross-references each employer against 18K+ companies from DOL H-1B/PERM/LCA filings to surface visa sponsorship likelihood. Runs entirely on free-tier infrastructure.
+Automated job discovery pipeline that scrapes ATS platforms daily, scores listings against your resume using a two-stage RAG pipeline (pgvector + a Groq-hosted model), and cross-references each employer against 18K+ companies from DOL H-1B/PERM/LCA filings to surface visa sponsorship likelihood. Runs on free-tier infrastructure at modest daily volume.
 
 ## How it works
 
@@ -17,7 +17,7 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
      3. Embed job text → 384-dim vector (all-MiniLM-L6-v2)
      4. Store in Supabase (pgvector)
      5. Cosine similarity vs. resume embedding → top 50 candidates
-     6. Groq Llama-3.1-8B-Instant rescoring → top 20 with reasoning
+     6. Groq GPT-OSS 20B rescoring → top 20 with reasoning
      7. Fuzzy-match employer → DOL sponsorship data (approval rate, history)
      8. Email digest: ranked matches with scores + sponsorship stats
 ```
@@ -37,8 +37,8 @@ rag/
 
 agents/
 ├── groq_client.py              # Groq API client w/ retry + JSON mode
-├── langchain_agent.py          # ReAct agent (Groq backend)
-├── mcp_server.py               # MCP tool server (search, filter, score, notify)
+├── langchain_agent.py          # Experimental agent (not used by daily workflow)
+├── mcp_server.py               # Experimental tool facade
 └── notifier.py                 # SMTP email digest
 
 utils/
@@ -66,7 +66,7 @@ supabase/
 
 **Matching** — `rag/match_jobs.py` runs a two-stage retrieval pipeline:
 1. **Recall**: cosine similarity (pgvector IVFFlat index) between resume and job embeddings → top 50
-2. **Precision**: Groq Llama-3.1-8B-Instant scores each job 0-100 with structured JSON output (`response_format: json_object`) → top 20
+2. **Precision**: Groq GPT-OSS 20B scores each job 0-100 with structured JSON output (`response_format: json_object`) → top 20
 
 **Sponsorship** — `etl/process_sponsorship_data.py` ingests three DOL datasets:
 - H-1B Employer Data Hub (CSV) — initial/continuing approvals & denials by employer
@@ -94,8 +94,8 @@ applications -- tracking (applied, interview, offer, rejected)
 
 - Python 3.11+
 - [Supabase](https://supabase.com) project (free tier)
-- [Groq](https://console.groq.com) API key (free tier: 30 req/min)
-- [SerpAPI](https://serpapi.com) key (100 searches/month free)
+- [Groq](https://console.groq.com) API key
+- [SerpAPI](https://serpapi.com) key (250 searches/month free as of August 2026)
 
 ### Install
 
@@ -112,6 +112,7 @@ Run both SQL files in Supabase SQL Editor (Settings → SQL Editor):
 ```bash
 supabase/schema.sql          # tables, indexes, views, triggers
 supabase/rpc_functions.sql   # match_jobs() vector search RPC
+supabase/migrate_match_dedup.sql # existing databases only: deduplicate matches
 ```
 
 ### Environment
@@ -154,6 +155,18 @@ python etl/process_sponsorship_data.py
 # → 18,385 quality employers uploaded (>= 3 approvals)
 ```
 
+To discover and ingest the newest cumulative OFLC quarterly PERM/LCA files:
+
+```bash
+python etl/fetch_dol_data.py --output-dir ../dol-data
+python etl/process_sponsorship_data.py \
+  --data-dir ../dol-data \
+  --preserve-existing-h1b
+```
+
+The `Quarterly DOL Sponsorship Refresh` workflow runs in February, May,
+August, and November and can also be triggered manually.
+
 ### Upload resume
 
 ```python
@@ -165,6 +178,21 @@ client.client.table("user_resume").insert({
     "skills": ["Python", "Distributed Systems", "AWS"],
     "experience_years": 3
 }).execute()
+```
+
+Multiple named profiles are supported. Upload a plain-text resume and choose
+which roles it targets:
+
+```bash
+python utils/resume_extractor.py \
+  --profile "Agentic AI" \
+  --resume-file agentic-ai-resume.txt \
+  --target-role "AI Engineer" \
+  --target-role "Agentic AI Engineer"
+
+# Match all active profiles, or only one profile:
+python rag/match_jobs.py
+python rag/match_jobs.py --profile "Agentic AI"
 ```
 
 ### GitHub Actions secrets
@@ -227,10 +255,10 @@ python agents/mcp_server.py
 
 | Service | Free tier | Bottleneck |
 |---------|-----------|------------|
-| Groq | 30 req/min, 14.4K/day | LLM scoring (2s sleep between calls) |
+| Groq | Account/model-specific | LLM scoring (2s sleep between calls) |
 | GitHub Actions | 2,000 min/month | ~5 min/run × 30 days = 150 min |
 | Supabase | 500MB DB, pgvector | 18K companies + jobs fits comfortably |
-| SerpAPI | 100 searches/month | 2 searches/day × 30 = 60 |
+| SerpAPI | 250 searches/month | 2 searches/day × 30 = 60 |
 | sentence-transformers | Local, unlimited | ~3s model load, <50ms/embedding |
 | **Total** | | **$0/month** |
 

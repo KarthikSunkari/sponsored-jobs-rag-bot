@@ -18,7 +18,7 @@ class GroqClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "llama-3.1-8b-instant",
+        model: Optional[str] = None,
         max_retries: int = 3,
         retry_delay: float = 1.0
     ):
@@ -27,7 +27,7 @@ class GroqClient:
         
         Args:
             api_key: Groq API key (defaults to GROQ_API_KEY env var)
-            model: Model to use (llama-3.1-8b-instant for speed)
+            model: Model to use (defaults to GROQ_MODEL)
             max_retries: Maximum number of retry attempts
             retry_delay: Delay between retries in seconds
         """
@@ -36,7 +36,7 @@ class GroqClient:
             raise ValueError("GROQ_API_KEY not found in environment variables")
         
         self.client = Groq(api_key=self.api_key)
-        self.model = model
+        self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         
@@ -165,7 +165,11 @@ Respond with ONLY a JSON object."""
     def test_connection(self) -> bool:
         """Test Groq API connection."""
         try:
-            response = self.generate("Say 'OK' if you can read this.", max_tokens=10)
+            response = self.generate(
+                "Respond with exactly OK and nothing else.",
+                temperature=0,
+                max_tokens=100
+            )
             return "OK" in response.upper()
         except Exception as e:
             print(f"Connection test failed: {e}")

@@ -11,7 +11,7 @@ env:
   SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
   SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
   GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-  GROQ_MODEL: llama-3.1-8b-instant
+  GROQ_MODEL: openai/gpt-oss-20b
   EMBEDDING_MODEL: all-MiniLM-L6-v2
   MIN_RELEVANCE_SCORE: 80
   MAX_DAILY_MATCHES: 20
@@ -35,6 +35,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --no-cache-dir -r requirements.txt
+
+      - name: Validate configuration
+        run: python utils/validate_config.py scrape
 
       - name: Scrape New Grad jobs (past 24 hours)
         run: |
@@ -64,6 +67,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --no-cache-dir -r requirements.txt
+
+      - name: Validate configuration
+        run: python utils/validate_config.py scrape
 
       - name: Scrape Mid-Level jobs (past 24 hours)
         run: |
@@ -95,6 +101,9 @@ jobs:
         run: |
           pip install --no-cache-dir -r requirements.txt
 
+      - name: Validate configuration
+        run: python utils/validate_config.py match
+
       - name: Match jobs against resume
         run: |
           python -u rag/match_jobs.py
@@ -124,6 +133,13 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install --no-cache-dir -r requirements.txt
+
+      - name: Validate configuration
+        run: python utils/validate_config.py notify
+        env:
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
 
       - name: Send email notifications
         run: |

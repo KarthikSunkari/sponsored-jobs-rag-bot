@@ -20,7 +20,7 @@ Add these **11 secrets**:
 | `SUPABASE_KEY` | From your `.env` file (anon key) |
 | `SUPABASE_SERVICE_KEY` | From your `.env` file (service_role key) |
 | `GROQ_API_KEY` | From your `.env` file |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` |
 | `SMTP_HOST` | `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | Your Gmail address |
@@ -91,7 +91,7 @@ Your automated job bot is now running on GitHub Actions!
 ## 🔧 Troubleshooting
 
 ### No jobs found?
-- Check SerpAPI quota (100 searches/month)
+- Check SerpAPI quota (250 searches/month as of August 2026)
 - Verify all 11 secrets are added correctly
 - Check Actions logs for errors
 
@@ -143,7 +143,7 @@ Your automated job bot is now running on GitHub Actions!
 **Common Issues:**
 - Secrets not working → Double-check spelling and values
 - No jobs extracted → Expected, will improve iteratively
-- Rate limits → SerpAPI has 100/month, Groq has 30 req/min
+- Rate limits → check the current SerpAPI plan and Groq account limits
 
 **System is working if:**
 - ✅ SerpAPI finds job URLs

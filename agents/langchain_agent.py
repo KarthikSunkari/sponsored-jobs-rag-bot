@@ -37,7 +37,7 @@ class JobSearchAgent:
         # Initialize Groq LLM
         self.llm = ChatGroq(
             api_key=os.getenv("GROQ_API_KEY"),
-            model_name=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
+            model_name=os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
             temperature=0.7
         )
         

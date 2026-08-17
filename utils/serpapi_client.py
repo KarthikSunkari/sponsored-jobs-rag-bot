@@ -148,7 +148,7 @@ if __name__ == "__main__":
         print("\n1. Sign up: https://serpapi.com/users/sign_up")
         print("2. Get API key from dashboard")
         print("3. Add to .env: SERPAPI_KEY=your-key-here")
-        print("\n4. Free tier: 100 searches/month")
+        print("\n4. Free tier: 250 searches/month (as of August 2026)")
         print("   Perfect for daily job scraping!")
         print("="*60)
     else:

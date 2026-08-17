@@ -558,7 +558,7 @@ def save_job_to_db(job_data: Dict) -> bool:
         return False
 
 
-def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True):
+def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True) -> int:
     """Main scraping function with hybrid API/Selenium approach."""
     print("=" * 60)
     print(f"Hybrid Job Scraper - {level.upper()}")
@@ -568,7 +568,7 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True):
     
     if level not in config:
         print(f"❌ Invalid level: {level}")
-        return
+        return 0
     
     query_config = config[level]
     query = query_config['query']
@@ -581,7 +581,7 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True):
     
     if not job_urls:
         print("❌ No jobs found")
-        return
+        return 0
     
     print(f"\n[2/3] Extracting job details...")
     jobs = []
@@ -609,6 +609,7 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True):
     print(f"Jobs saved: {saved_count}")
     print(f"Duplicates: {len(jobs) - saved_count}")
     print("=" * 60)
+    return len(jobs)
 
 
 if __name__ == "__main__":
@@ -618,4 +619,7 @@ if __name__ == "__main__":
     parser.add_argument("--show-browser", action="store_true")
     
     args = parser.parse_args()
-    scrape_jobs(args.level, args.max_jobs, headless=not args.show_browser)
+    extracted_count = scrape_jobs(
+        args.level, args.max_jobs, headless=not args.show_browser
+    )
+    raise SystemExit(0 if extracted_count else 1)

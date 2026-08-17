@@ -2,6 +2,8 @@
 Resume text extractor utility.
 Extracts text from resume image and stores in Supabase.
 """
+import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -9,6 +11,26 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
+
+
+def extract_resume_text(resume_file: Path) -> str:
+    """Extract resume text from a UTF-8 text file or PDF."""
+    if resume_file.suffix.lower() != ".pdf":
+        return resume_file.read_text(encoding="utf-8").strip()
+
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise RuntimeError(
+            "PDF resume support requires pypdf. Install project dependencies first."
+        ) from exc
+
+    reader = PdfReader(str(resume_file))
+    pages = [page.extract_text(extraction_mode="layout") or "" for page in reader.pages]
+    text = "\n".join(pages)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def extract_resume_from_image():
@@ -75,7 +97,29 @@ AWARDS AND ACHIEVEMENTS
     return resume_text.strip()
 
 
-def upload_resume_to_supabase(resume_text: str):
+def extract_skills(resume_text: str):
+    """Extract known technical skills without tying them to one profile."""
+    known_skills = [
+        "Java", "Python", "SQL", "C/C++", "Go", "TypeScript", "Bash",
+        "Spring Boot", "Django", "Next.js", "React", "PyTest", "JUnit",
+        "PyTorch", "AWS", "Kubernetes", "Docker", "Terraform", "Kafka",
+        "Jenkins", "Prometheus", "Grafana", "PostgreSQL", "pgvector",
+        "MongoDB", "Redis", "Supabase", "OpenSearch", "Spark",
+        "Distributed Systems", "Microservices", "Event-Driven Architecture",
+        "CI/CD", "REST", "GraphQL", "System Design", "RAG", "LLM",
+        "LangChain", "MCP", "Agents",
+    ]
+    lowered = resume_text.lower()
+    return [skill for skill in known_skills if skill.lower() in lowered]
+
+
+def upload_resume_to_supabase(
+    resume_text: str,
+    profile_name: str = "SDE",
+    target_roles=None,
+    experience_years: int = 3,
+    is_active: bool = True,
+):
     """Upload resume to Supabase with embedding."""
     print("Generating resume embedding...")
     embedding_service = get_embedding_service()
@@ -84,18 +128,12 @@ def upload_resume_to_supabase(resume_text: str):
     print("Uploading resume to Supabase...")
     client = get_supabase_client()
     
-    # Extract skills from resume
-    skills = [
-        "Java", "Python", "SQL", "C/C++", "Go", "TypeScript", "Bash",
-        "Spring Boot", "Django", "Next.js", "React", "PyTest", "JUnit", "PyTorch",
-        "AWS", "Kubernetes", "Docker", "Terraform", "Kafka", "Jenkins", "Prometheus", "Grafana",
-        "PostgreSQL", "pgvector", "MongoDB", "Redis", "Supabase", "OpenSearch", "Spark",
-        "Distributed Systems", "Microservices", "Event-Driven Architecture", "CI/CD", 
-        "REST/GraphQL APIs", "System Design"
-    ]
-    
-    # Check if resume already exists
-    existing = client.client.table("user_resume").select("*").limit(1).execute()
+    skills = extract_skills(resume_text)
+    target_roles = target_roles or []
+
+    existing = client.client.table("user_resume").select("*").ilike(
+        "profile_name", profile_name
+    ).limit(1).execute()
     
     if existing.data:
         # Update existing resume
@@ -103,35 +141,58 @@ def upload_resume_to_supabase(resume_text: str):
             "resume_text": resume_text,
             "embedding": embedding,
             "skills": skills,
-            "experience_years": 3
+            "experience_years": experience_years,
+            "target_roles": target_roles,
+            "is_active": is_active,
         }).eq("id", existing.data[0]["id"]).execute()
-        print(f"✅ Updated existing resume (ID: {existing.data[0]['id']})")
+        print(f"✅ Updated {profile_name} resume (ID: {existing.data[0]['id']})")
     else:
         # Insert new resume
         result = client.client.table("user_resume").insert({
+            "profile_name": profile_name,
             "resume_text": resume_text,
             "embedding": embedding,
             "skills": skills,
-            "experience_years": 3
+            "experience_years": experience_years,
+            "target_roles": target_roles,
+            "is_active": is_active,
         }).execute()
-        print(f"✅ Inserted new resume (ID: {result.data[0]['id']})")
+        print(f"✅ Inserted {profile_name} resume (ID: {result.data[0]['id']})")
     
     return result.data[0] if result.data else None
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--profile", default="SDE")
+    parser.add_argument("--resume-file", type=Path)
+    parser.add_argument("--target-role", action="append", default=[])
+    parser.add_argument("--experience-years", type=int, default=3)
+    parser.add_argument("--inactive", action="store_true")
+    args = parser.parse_args()
+
     print("=" * 60)
     print("Resume Extractor")
     print("=" * 60)
     
     # Extract resume text
     print("\n[1/2] Extracting resume text...")
-    resume_text = extract_resume_from_image()
+    resume_text = (
+        extract_resume_text(args.resume_file)
+        if args.resume_file
+        else extract_resume_from_image()
+    )
     print(f"✅ Extracted {len(resume_text)} characters")
     
     # Upload to Supabase
     print("\n[2/2] Uploading to Supabase...")
-    result = upload_resume_to_supabase(resume_text)
+    result = upload_resume_to_supabase(
+        resume_text,
+        profile_name=args.profile,
+        target_roles=args.target_role,
+        experience_years=args.experience_years,
+        is_active=not args.inactive,
+    )
     
     if result:
         print("\n" + "=" * 60)

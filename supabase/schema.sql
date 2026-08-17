@@ -59,17 +59,24 @@ CREATE TABLE IF NOT EXISTS job_embeddings (
 CREATE INDEX idx_job_embeddings_vector ON job_embeddings 
 USING ivfflat (embedding vector_cosine_ops)
 WITH (lists = 100);
+CREATE UNIQUE INDEX idx_job_embeddings_job_id ON job_embeddings(job_id);
 
 -- User resume table: stores user resume and embeddings
 CREATE TABLE IF NOT EXISTS user_resume (
     id BIGSERIAL PRIMARY KEY,
+    profile_name TEXT NOT NULL UNIQUE DEFAULT 'SDE',
     resume_text TEXT NOT NULL,
     embedding vector(384),
     skills TEXT[], -- extracted skills
     experience_years INTEGER,
+    target_roles TEXT[] DEFAULT '{}',
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at TIMESTAMP DEFAULT NOW(),
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_resume_profile_name_lower
+ON user_resume (lower(profile_name));
 
 -- Job matches table: stores scored matches between resume and jobs
 CREATE TABLE IF NOT EXISTS job_matches (
@@ -80,11 +87,13 @@ CREATE TABLE IF NOT EXISTS job_matches (
     llama_score INTEGER, -- 0-100 from Llama-3
     llama_reasoning TEXT,
     is_notified BOOLEAN DEFAULT FALSE,
-    matched_at TIMESTAMP DEFAULT NOW()
+    matched_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(job_id, resume_id)
 );
 
 -- Indexes for match queries
 CREATE INDEX idx_job_matches_job_id ON job_matches(job_id);
+CREATE INDEX idx_job_matches_resume_id ON job_matches(resume_id);
 CREATE INDEX idx_job_matches_llama_score ON job_matches(llama_score DESC);
 CREATE INDEX idx_job_matches_is_notified ON job_matches(is_notified);
 
@@ -114,7 +123,8 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql
+SET search_path = public, pg_temp;
 
 -- Trigger to auto-calculate approval rate
 CREATE TRIGGER trigger_update_approval_rate
@@ -123,7 +133,7 @@ FOR EACH ROW
 EXECUTE FUNCTION update_approval_rate();
 
 -- View for high-quality sponsorship companies (>70% approval, >3 approvals)
-CREATE OR REPLACE VIEW sponsorship_companies AS
+CREATE OR REPLACE VIEW sponsorship_companies WITH (security_invoker = true) AS
 SELECT 
     id,
     employer_name,
@@ -140,7 +150,7 @@ WHERE approval_rate >= 70
 ORDER BY approval_rate DESC, total_approvals DESC;
 
 -- View for active job matches with company info
-CREATE OR REPLACE VIEW active_matches AS
+CREATE OR REPLACE VIEW active_matches WITH (security_invoker = true) AS
 SELECT 
     jm.id,
     jm.job_id,
@@ -155,11 +165,14 @@ SELECT
     jm.llama_score,
     jm.llama_reasoning,
     jm.is_notified,
-    jm.matched_at
+    jm.matched_at,
+    ur.profile_name AS resume_profile
 FROM job_matches jm
 JOIN jobs j ON jm.job_id = j.id
 JOIN companies c ON j.company_id = c.id
+JOIN user_resume ur ON jm.resume_id = ur.id
 WHERE j.is_active = TRUE
+  AND c.total_approvals >= 3
+  AND c.approval_rate >= 70
   AND jm.llama_score >= 80
 ORDER BY jm.llama_score DESC, jm.matched_at DESC;
-

@@ -55,6 +55,7 @@ def format_match_email(matches: List[Dict]) -> str:
         employer = match.get('employer_name', 'N/A')
         location = match.get('location', 'N/A')
         score = match.get('llama_score', 0)
+        profile = match.get('resume_profile', 'Default')
         approval_rate = match.get('approval_rate', 0)
         reasoning = match.get('llama_reasoning', 'No reasoning available')
         job_url = match.get('job_url', '#')
@@ -63,6 +64,7 @@ def format_match_email(matches: List[Dict]) -> str:
         <div class="match">
             <div class="title">{num}. {title}</div>
             <div class="company">🏢 {employer}</div>
+            <div>👤 Resume profile: {profile}</div>
             <div>📍 {location}</div>
             <div class="score">⭐ Match Score: {score}/100</div>
             <div>✅ Sponsorship Approval Rate: {rate:.1f}%</div>
@@ -75,6 +77,7 @@ def format_match_email(matches: List[Dict]) -> str:
             num=i,
             title=title,
             employer=employer,
+            profile=profile,
             location=location,
             score=score,
             rate=approval_rate,

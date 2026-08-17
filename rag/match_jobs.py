@@ -1,6 +1,8 @@
 """
 Main job matching pipeline using RAG (pgvector + Llama-3).
 """
+import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -14,93 +16,50 @@ from rag.embedding_service import get_embedding_service
 from agents.groq_client import GroqClient
 
 
-def get_resume_data() -> Optional[Dict]:
-    """Get user resume from database."""
+def get_resume_profiles(profile_name: Optional[str] = None) -> List[Dict]:
+    """Get one named resume profile or all active profiles."""
     client = get_supabase_client()
-    
+
     try:
-        result = client.client.table("user_resume").select("*").limit(1).execute()
-        if result.data:
-            return result.data[0]
+        query = client.client.table("user_resume").select("*")
+        if profile_name:
+            query = query.ilike("profile_name", profile_name)
         else:
-            print("No resume found in database. Please upload your resume first.")
-            return None
+            query = query.eq("is_active", True)
+        result = query.order("profile_name").execute()
+        if result.data:
+            return result.data
+        print("No matching resume profiles found. Please upload a resume first.")
+        return []
     except Exception as e:
-        print(f"Error fetching resume: {e}")
-        return None
+        print(f"Error fetching resume profiles: {e}")
+        return []
 
 
 def find_similar_jobs(resume_embedding: List[float], limit: int = 50) -> List[Dict]:
     """Find similar jobs using vector similarity search."""
     client = get_supabase_client()
-    
-    # Note: This requires a custom RPC function in Supabase
-    # For now, we'll use a simpler approach
+
     try:
-        # Get all job embeddings and calculate similarity in Python
-        # In production, this should be done via Supabase RPC for efficiency
-        result = client.client.table("job_embeddings").select(
-            "id, job_id, embedding"
-        ).execute()
-        
-        if not result.data:
-            print("No job embeddings found")
+        top_jobs = client.search_similar_jobs(resume_embedding, limit=limit)
+        if not top_jobs:
+            print("No job embeddings found above the similarity threshold")
             return []
-        
-        # Calculate cosine similarity
-        import numpy as np
-        import json
-        import ast
-        
-        resume_vec = np.array(resume_embedding, dtype=float)
-        similarities = []
-        
-        for item in result.data:
-            # Handle both list and string formats
-            embedding = item["embedding"]
-            if isinstance(embedding, str):
-                try:
-                    # Try JSON first
-                    embedding = json.loads(embedding)
-                except:
-                    try:
-                        # Try ast.literal_eval for Python list strings
-                        embedding = ast.literal_eval(embedding)
-                    except:
-                        print(f"Warning: Could not parse embedding for job {item['job_id']}")
-                        continue
-            
-            job_vec = np.array(embedding, dtype=float)
-            
-            # Calculate cosine similarity
-            similarity = np.dot(resume_vec, job_vec) / (
-                np.linalg.norm(resume_vec) * np.linalg.norm(job_vec)
-            )
-            similarities.append({
-                "job_id": item["job_id"],
-                "similarity": float(similarity)
-            })
-        
-        # Sort by similarity and get top N
-        similarities.sort(key=lambda x: x["similarity"], reverse=True)
-        top_jobs = similarities[:limit]
-        
-        # Fetch full job details
+
         job_ids = [j["job_id"] for j in top_jobs]
         jobs_result = client.client.table("jobs").select(
             "*, companies(employer_name, approval_rate, total_approvals)"
-        ).in_("id", job_ids).execute()
-        
-        # Merge similarity scores
+        ).in_("id", job_ids).eq("is_active", True).execute()
+
+        jobs_by_id = {job["id"]: job for job in jobs_result.data}
         jobs_with_scores = []
-        for job in jobs_result.data:
-            sim = next((s for s in top_jobs if s["job_id"] == job["id"]), None)
-            if sim:
-                job["cosine_similarity"] = sim["similarity"]
+        for match in top_jobs:
+            job = jobs_by_id.get(match["job_id"])
+            if job:
+                job["cosine_similarity"] = float(match["similarity"])
                 jobs_with_scores.append(job)
-        
         return jobs_with_scores
-        
+
     except Exception as e:
         print(f"Error finding similar jobs: {e}")
         return []
@@ -115,7 +74,7 @@ def score_with_llama(
     scorer = GroqClient()
     scored_jobs = []
     
-    print(f"Scoring top {min(len(jobs), max_jobs)} jobs with Groq Llama-3...")
+    print(f"Scoring top {min(len(jobs), max_jobs)} jobs with Groq...")
     
     for job in tqdm(jobs[:max_jobs], desc="Groq scoring"):
         try:
@@ -155,8 +114,7 @@ def save_matches(resume_id: int, scored_jobs: List[Dict]) -> int:
             "resume_id": resume_id,
             "cosine_similarity": job.get("cosine_similarity", 0),
             "llama_score": job.get("llama_score", 0),
-            "llama_reasoning": job.get("llama_reasoning", ""),
-            "is_notified": False
+            "llama_reasoning": job.get("llama_reasoning", "")
         }
         
         result = client.insert_job_match(match_data)
@@ -166,18 +124,13 @@ def save_matches(resume_id: int, scored_jobs: List[Dict]) -> int:
     return saved_count
 
 
-def main():
-    """Main matching pipeline."""
+def match_resume_profile(resume: Dict) -> bool:
+    """Run retrieval and scoring for one resume profile."""
+    profile_name = resume.get("profile_name", "Default")
     print("=" * 60)
-    print("Job Matching Pipeline")
+    print(f"Job Matching Pipeline — {profile_name}")
     print("=" * 60)
-    
-    # 1. Get resume
-    print("\n[1/5] Fetching resume...")
-    resume = get_resume_data()
-    if not resume:
-        return
-    
+
     resume_text = resume.get("resume_text", "")
     resume_embedding = resume.get("embedding")
     
@@ -209,11 +162,12 @@ def main():
     
     if not similar_jobs:
         print("No jobs found. Make sure jobs are scraped and embedded.")
-        return
+        return False
     
     # 3. Score with Llama
-    print("\n[3/5] Scoring jobs with Llama-3...")
-    scored_jobs = score_with_llama(resume_text, similar_jobs, max_jobs=20)
+    print("\n[3/5] Scoring jobs with Groq...")
+    max_jobs = int(os.getenv("MAX_DAILY_MATCHES", "20"))
+    scored_jobs = score_with_llama(resume_text, similar_jobs, max_jobs=max_jobs)
     print(f"Scored {len(scored_jobs)} jobs")
     
     # 4. Save matches
@@ -238,7 +192,24 @@ def main():
     print("✅ Matching pipeline completed!")
     print(f"Total matches: {saved_count}")
     print(f"High-quality matches (>80): {sum(1 for j in scored_jobs if j.get('llama_score', 0) >= 80)}")
+    return bool(scored_jobs)
+
+
+def main(profile_name: Optional[str] = None) -> bool:
+    """Run matching for one named profile or every active profile."""
+    print("\n[1/5] Fetching resume profiles...")
+    resumes = get_resume_profiles(profile_name)
+    if not resumes:
+        return False
+    outcomes = [match_resume_profile(resume) for resume in resumes]
+    return all(outcomes)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--profile",
+        help="Match only this resume profile; defaults to all active profiles",
+    )
+    args = parser.parse_args()
+    raise SystemExit(0 if main(args.profile) else 1)

@@ -14,10 +14,12 @@ class SupabaseClient:
     
     def __init__(self):
         url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
+        key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
         
         if not url or not key:
-            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set as environment variables (or in .env file)")
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY (or SUPABASE_KEY) must be set"
+            )
         
         self.client: Client = create_client(url, key)
     
@@ -32,6 +34,32 @@ class SupabaseClient:
         except Exception as e:
             print(f"Error inserting company: {e}")
             return None
+
+    def upsert_companies(self, companies: List[Dict[str, Any]]) -> int:
+        """Upsert a batch of sponsorship companies."""
+        try:
+            result = self.client.table("companies").upsert(
+                companies,
+                on_conflict="employer_name"
+            ).execute()
+            return len(result.data or [])
+        except Exception as e:
+            print(f"Error upserting company batch: {e}")
+            return 0
+
+    def get_all_companies(self, page_size: int = 1000) -> List[Dict]:
+        """Fetch all companies in pages for quarterly data merging."""
+        companies = []
+        start = 0
+        while True:
+            result = self.client.table("companies").select(
+                "employer_name,naics_code,h1b_approvals,h1b_denials"
+            ).range(start, start + page_size - 1).execute()
+            page = result.data or []
+            companies.extend(page)
+            if len(page) < page_size:
+                return companies
+            start += page_size
     
     def get_company_by_name(self, employer_name: str) -> Optional[Dict]:
         """Get company by employer name."""
@@ -96,9 +124,12 @@ class SupabaseClient:
             return []
     
     def insert_job_match(self, match_data: Dict[str, Any]) -> Optional[Dict]:
-        """Insert job match result."""
+        """Insert or refresh a match for a resume/job pair."""
         try:
-            result = self.client.table("job_matches").insert(match_data).execute()
+            result = self.client.table("job_matches").upsert(
+                match_data,
+                on_conflict="job_id,resume_id"
+            ).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"Error inserting job match: {e}")

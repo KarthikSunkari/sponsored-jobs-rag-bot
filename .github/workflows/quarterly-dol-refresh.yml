@@ -1,0 +1,39 @@
+name: Quarterly DOL Sponsorship Refresh
+
+on:
+  schedule:
+    # OFLC quarters end Dec/Mar/Jun/Sep; releases typically follow later.
+    - cron: '20 15 20 2,5,8,11 *'
+  workflow_dispatch:
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+  SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+jobs:
+  refresh-sponsorship-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Validate configuration
+        run: python utils/validate_config.py database
+
+      - name: Download latest official DOL files
+        run: python etl/fetch_dol_data.py --output-dir /tmp/dol-data
+
+      - name: Refresh sponsorship companies
+        run: >-
+          python etl/process_sponsorship_data.py
+          --data-dir /tmp/dol-data
+          --preserve-existing-h1b

@@ -1,5 +1,6 @@
 # Core dependencies
 python-dotenv==1.0.0
+pypdf==6.16.1
 pydantic==2.5.3
 pydantic-settings==2.1.0
 
@@ -25,6 +26,7 @@ langchain-community==0.0.20
 # Web scraping
 requests==2.31.0
 beautifulsoup4==4.12.3
+Flask==3.0.0
 feedparser==6.0.11
 googlesearch-python==1.2.4
 lxml==5.1.0
@@ -39,4 +41,3 @@ python-dateutil==2.8.2
 # Testing
 pytest==7.4.4
 pytest-asyncio==0.23.3
-

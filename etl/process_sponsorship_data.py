@@ -2,7 +2,10 @@
 ETL script to process H-1B, PERM, and LCA sponsorship data.
 Aggregates data by employer and uploads to Supabase.
 """
+from __future__ import annotations
+import argparse
 import pandas as pd
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 from tqdm import tqdm
@@ -172,6 +175,7 @@ def calculate_totals(companies: Dict[str, Dict]) -> Dict[str, Dict]:
             data["perm_denials"] +
             data["lca_denials"]
         )
+        data["last_updated"] = datetime.now(timezone.utc).isoformat()
     return companies
 
 
@@ -189,7 +193,7 @@ def filter_quality_companies(
     return quality_companies
 
 
-def upload_to_supabase(companies: List[Dict], batch_size: int = 50) -> None:
+def upload_to_supabase(companies: List[Dict], batch_size: int = 500) -> None:
     """Upload company data to Supabase in batches."""
     print(f"Uploading {len(companies)} companies to Supabase...")
     client = get_supabase_client()
@@ -197,41 +201,76 @@ def upload_to_supabase(companies: List[Dict], batch_size: int = 50) -> None:
     success_count = 0
     for i in tqdm(range(0, len(companies), batch_size), desc="Uploading batches"):
         batch = companies[i:i + batch_size]
-        for company in batch:
-            result = client.insert_company(company)
-            if result:
-                success_count += 1
+        success_count += client.upsert_companies(batch)
 
     print(f"Successfully uploaded {success_count}/{len(companies)} companies")
 
 
+def merge_existing_h1b(companies: Dict[str, Dict]) -> Dict[str, Dict]:
+    """Preserve historical H-1B counts during quarterly PERM/LCA refreshes."""
+    client = get_supabase_client()
+    for existing in client.get_all_companies():
+        employer = normalize_employer_name(existing.get("employer_name"))
+        if not employer:
+            continue
+        company = companies.setdefault(employer, {
+            "employer_name": employer,
+            "naics_code": existing.get("naics_code"),
+            "h1b_approvals": 0, "h1b_denials": 0,
+            "perm_approvals": 0, "perm_denials": 0,
+            "lca_approvals": 0, "lca_denials": 0,
+        })
+        company["h1b_approvals"] = existing.get("h1b_approvals") or 0
+        company["h1b_denials"] = existing.get("h1b_denials") or 0
+        if not company.get("naics_code"):
+            company["naics_code"] = existing.get("naics_code")
+    return companies
+
+
+def newest_file(data_dir: Path, pattern: str) -> Path | None:
+    files = sorted(data_dir.glob(pattern), reverse=True)
+    return files[0] if files else None
+
+
 def main():
     """Main ETL pipeline."""
-    # Data files are in the parent directory of the repo
-    data_dir = Path(__file__).resolve().parent.parent.parent
-    h1b_file = data_dir / "h1b_datahubexport-2023.csv"
-    perm_file = data_dir / "PERM_Disclosure_Data_FY2025_Q4.xlsx"
-    lca_file = data_dir / "LCA_Disclosure_Data_FY2025_Q1.xlsx"
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent.parent,
+    )
+    parser.add_argument("--preserve-existing-h1b", action="store_true")
+    args = parser.parse_args()
+
+    data_dir = args.data_dir
+    h1b_file = newest_file(data_dir, "h1b_datahubexport-*.csv")
+    perm_file = newest_file(data_dir, "PERM_Disclosure_Data_FY*_Q*.xlsx")
+    lca_file = newest_file(data_dir, "LCA_Disclosure_Data_FY*_Q*.xlsx")
 
     print(f"Data directory: {data_dir}")
 
     # Check files exist
-    if not h1b_file.exists():
-        print(f"Error: H-1B file not found at {h1b_file}")
+    if h1b_file:
+        companies = process_h1b_data(h1b_file)
+    elif args.preserve_existing_h1b:
+        companies = {}
+    else:
+        print("Error: H-1B file not found; use --preserve-existing-h1b for refreshes")
         return
 
-    # Process data
-    companies = process_h1b_data(h1b_file)
-
-    if perm_file.exists():
+    if perm_file:
         companies = process_perm_data(perm_file, companies)
     else:
-        print(f"Warning: PERM file not found at {perm_file}, skipping...")
+        print("Warning: PERM quarterly file not found, skipping...")
 
-    if lca_file.exists():
+    if lca_file:
         companies = process_lca_data(lca_file, companies)
     else:
-        print(f"Warning: LCA file not found at {lca_file}, skipping...")
+        print("Warning: LCA quarterly file not found, skipping...")
+
+    if args.preserve_existing_h1b and not h1b_file:
+        companies = merge_existing_h1b(companies)
 
     # Calculate totals and filter
     companies = calculate_totals(companies)
