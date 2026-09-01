@@ -8,7 +8,7 @@ This system uses Docker containerization for consistent Selenium execution acros
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│           GitHub Actions (Weekdays at 14:00 UTC)        │
+│             GitHub Actions (Daily at 14:00 UTC)         │
 ├─────────────────────────────────────────────────────────┤
 │  1. Poll direct ATS feeds + discovery (100 jobs)        │
 │  2. Match Jobs (pgvector + Groq)                        │
