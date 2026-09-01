@@ -57,11 +57,21 @@ _FOREIGN_LOCATION_PATTERNS = (
     r"\b(?:united kingdom|u\.?k\.?|london|manchester|ireland|dublin)\b",
     r"\b(?:canada|toronto|vancouver|montreal|ottawa)\b",
     r"\b(?:europe|emea|apac|asia|australia|singapore|japan|tokyo|mexico)\b",
+    r"\b(?:berlin|munich|hamburg|frankfurt|amsterdam|stockholm|copenhagen|"
+    r"helsinki|oslo|paris|madrid|barcelona|lisbon|porto|prague|warsaw|"
+    r"zurich|geneva|vienna|brussels|sofia|bucharest|kyiv|vilnius|seoul)\b",
+    r"\b(?:lithuania|south korea|republic of korea)\b",
 )
 
 _FOREIGN_DESCRIPTION_PATTERNS = (
     r"\b(?:role|position|job|candidate|applicant)s?\b.{0,45}\b(?:based|located|remote)\b.{0,25}\b(?:india|brazil|brasil|latam|latin america|united kingdom|uk|canada|europe|emea|apac)\b",
     r"\b(?:based|located|remote)\s+(?:in|from|within)\s+(?:india|brazil|brasil|latam|latin america|united kingdom|uk|canada|europe|emea|apac)\b",
+)
+
+_CANADIAN_CODE_SEGMENT = re.compile(
+    r"(?:^|[;/])\s*[^;/]+,\s*(?:AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)"
+    r"\s*,\s*CA\s*(?=$|[;/])",
+    re.IGNORECASE,
 )
 
 
@@ -78,17 +88,30 @@ def assess_us_job_location(location: str = "", description: str = "") -> Tuple[b
     location = (location or "").strip()
     description = (description or "").strip()
 
-    if _matches_any(location, _US_LOCATION_PATTERNS) or _matches_any(
-        description, _US_DESCRIPTION_PATTERNS
+    # ATS country codes make "..., ON, CA" ambiguous with California. Remove
+    # Canadian province/country segments before checking whether another
+    # segment explicitly offers a US location.
+    without_canadian_segments, canadian_segment_count = _CANADIAN_CODE_SEGMENT.subn(
+        " ", location
+    )
+    if canadian_segment_count and not _matches_any(
+        without_canadian_segments, _US_LOCATION_PATTERNS
     ):
+        return False, "non-US-only location"
+
+    if _matches_any(location, _US_LOCATION_PATTERNS):
         return True, "explicit US availability"
 
     if _matches_any(location, _GLOBAL_LOCATION_PATTERNS):
         return True, "global/worldwide availability"
 
-    if _matches_any(location, _FOREIGN_LOCATION_PATTERNS) or _matches_any(
-        description, _FOREIGN_DESCRIPTION_PATTERNS
-    ):
+    if _matches_any(location, _FOREIGN_LOCATION_PATTERNS):
+        return False, "non-US-only location"
+
+    if _matches_any(description, _US_DESCRIPTION_PATTERNS):
+        return True, "explicit US availability"
+
+    if _matches_any(description, _FOREIGN_DESCRIPTION_PATTERNS):
         return False, "non-US-only location"
 
     if _matches_any(description, _GLOBAL_DESCRIPTION_PATTERNS):
@@ -103,3 +126,19 @@ def assess_us_job_location(location: str = "", description: str = "") -> Tuple[b
 def is_us_job_eligible(location: str = "", description: str = "") -> bool:
     """Convenience boolean wrapper for US eligibility checks."""
     return assess_us_job_location(location, description)[0]
+
+
+_NO_SPONSORSHIP_PATTERNS = (
+    r"\b(?:must|should)\s+(?:already\s+)?be\s+(?:legally\s+)?authorized\b.{0,80}\bwithout\b.{0,30}\bsponsorship\b",
+    r"\b(?:without|no)\s+(?:current\s+or\s+future\s+)?(?:visa\s+)?sponsorship\b",
+    r"\b(?:will|can|does)\s+not\s+(?:provide|offer)\b.{0,25}\bsponsorship\b",
+    r"\b(?:unable|not able)\s+to\s+sponsor\b",
+)
+
+
+def assess_sponsorship_language(description: str = "") -> Tuple[bool, str]:
+    """Reject postings that explicitly say employment sponsorship is unavailable."""
+    text = description or ""
+    if _matches_any(text, _NO_SPONSORSHIP_PATTERNS):
+        return False, "posting explicitly excludes visa sponsorship"
+    return True, "no explicit sponsorship exclusion"

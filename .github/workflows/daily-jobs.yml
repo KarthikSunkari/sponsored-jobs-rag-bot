@@ -2,8 +2,8 @@ name: Daily Job Scraping and Matching
 
 on:
   schedule:
-    # Run at 9 AM EST (2 PM UTC) every day
-    - cron: '0 14 * * *'
+    # Run at 14:00 UTC, Monday through Friday.
+    - cron: '0 14 * * 1-5'
   workflow_dispatch:  # Allow manual trigger
 
 env:
@@ -15,7 +15,7 @@ env:
   GROQ_MAX_COMPLETION_TOKENS: 1024
   GROQ_REQUEST_DELAY_SECONDS: 2.5
   EMBEDDING_MODEL: all-MiniLM-L6-v2
-  MIN_RELEVANCE_SCORE: 80
+  MIN_RELEVANCE_SCORE: 60
   MAX_DAILY_MATCHES: 20
   MATCH_THRESHOLD: 0.40
   SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
@@ -23,7 +23,7 @@ env:
   GOOGLE_SEARCH_ENGINE_ID: ${{ secrets.GOOGLE_SEARCH_ENGINE_ID }}
 
 jobs:
-  scrape-newgrad-jobs:
+  scrape-jobs:
     runs-on: ubuntu-latest
 
     steps:
@@ -42,54 +42,22 @@ jobs:
       - name: Validate configuration
         run: python utils/validate_config.py scrape
 
-      - name: Scrape New Grad jobs (past 24 hours)
+      - name: Poll direct ATS feeds and discover additional jobs
         run: |
-          python -u etl/scrape_jobs.py --level newgrad --max-jobs 25
+          python -u etl/scrape_jobs.py --level all --max-jobs 100 --lookback-days 7
 
       - name: Upload scraping logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: newgrad-scraping-logs
-          path: |
-            *.log
-          retention-days: 7
-
-  scrape-midlevel-jobs:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python dependencies
-        run: |
-          pip install --no-cache-dir -r requirements.txt
-
-      - name: Validate configuration
-        run: python utils/validate_config.py scrape
-
-      - name: Scrape Mid-Level jobs (past 24 hours)
-        run: |
-          python -u etl/scrape_jobs.py --level midlevel --max-jobs 25
-
-      - name: Upload scraping logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: midlevel-scraping-logs
+          name: job-scraping-logs
           path: |
             *.log
           retention-days: 7
 
   match-jobs:
     runs-on: ubuntu-latest
-    needs: [scrape-newgrad-jobs, scrape-midlevel-jobs]
+    needs: scrape-jobs
 
     steps:
       - name: Checkout code

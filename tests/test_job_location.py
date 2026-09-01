@@ -1,6 +1,10 @@
 import pytest
 
-from utils.job_location import assess_us_job_location, is_us_job_eligible
+from utils.job_location import (
+    assess_sponsorship_language,
+    assess_us_job_location,
+    is_us_job_eligible,
+)
 
 
 @pytest.mark.parametrize(
@@ -72,8 +76,44 @@ def test_explicit_us_description_wins_for_multi_country_role():
     assert is_us_job_eligible("Remote", description) is True
 
 
+def test_explicit_foreign_location_wins_over_us_boilerplate():
+    description = "This position supports customers throughout the United States."
+
+    assert is_us_job_eligible("London, ON, Canada", description) is False
+
+
+def test_canadian_country_code_is_not_california():
+    assert is_us_job_eligible("London, ON, ca") is False
+
+
+def test_us_location_survives_alongside_canadian_country_code():
+    assert is_us_job_eligible("New York, NY; Toronto, ON, CA") is True
+
+
 def test_unknown_location_is_retained_conservatively():
     eligible, reason = assess_us_job_location("Headquarters Office")
 
     assert eligible is True
     assert reason == "location unknown or not explicitly restricted"
+
+
+@pytest.mark.parametrize(
+    "location", ["Berlin", "Munich", "Amsterdam", "Stockholm", "Vilnius", "Seoul"]
+)
+def test_foreign_city_only_locations_are_excluded(location):
+    assert is_us_job_eligible(location) is False
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "Candidates must be authorized to work in the US without sponsorship.",
+        "We will not provide visa sponsorship for this position.",
+        "The company is unable to sponsor applicants.",
+    ],
+)
+def test_explicit_no_sponsorship_language_is_excluded(description):
+    eligible, reason = assess_sponsorship_language(description)
+
+    assert eligible is False
+    assert "excludes" in reason

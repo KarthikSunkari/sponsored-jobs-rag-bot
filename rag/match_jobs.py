@@ -247,7 +247,11 @@ def match_resume_profile(resume: Dict) -> bool:
     print("\n" + "=" * 60)
     print("✅ Matching pipeline completed!")
     print(f"Total matches: {saved_count}")
-    print(f"High-quality matches (>80): {sum(1 for j in scored_jobs if j.get('llama_score', 0) >= 80)}")
+    min_score = int(os.getenv("MIN_RELEVANCE_SCORE", "80"))
+    print(
+        f"Matches meeting notification threshold (>={min_score}): "
+        f"{sum(1 for j in scored_jobs if j.get('llama_score', 0) >= min_score)}"
+    )
     return bool(scored_jobs)
 
 

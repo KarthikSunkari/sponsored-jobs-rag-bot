@@ -134,7 +134,7 @@ def send_daily_digest():
     """Send daily digest of unnotified high-quality matches."""
     client = get_supabase_client()
     
-    # Get unnotified matches with score >= 80
+    # Get unnotified matches at the configured relevance threshold.
     min_score = int(os.getenv("MIN_RELEVANCE_SCORE", "80"))
     matches = client.get_unnotified_matches(min_score=min_score)
 
