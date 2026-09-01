@@ -6,7 +6,9 @@ newgrad:
   query: >
     (site:boards.greenhouse.io OR site:jobs.ashbyhq.com OR site:jobs.lever.co OR 
     site:myworkdayjobs.com OR site:jobs.jobvite.com OR site:smartrecruiters.com OR 
-    site:icims.com) ("New Grad" OR "University" OR "Associate Software" OR 
+    site:icims.com OR site:fa.oraclecloud.com/hcmUI/CandidateExperience OR
+    site:eightfold.ai/careers OR site:apply.workable.com OR site:recruitee.com)
+    ("New Grad" OR "University" OR "Associate Software" OR
     "Associate MTS" OR "SMTS" OR "Entry Level" OR "SDE I" OR "Junior Software" OR 
     "Campus" OR "Early Talent" OR "Rotational" OR "Technology Analyst") 
     ("Software Engineer" OR "Developer" OR "SDE") -Senior -Sr -Staff -Principal -Director
@@ -33,7 +35,9 @@ midlevel:
   description: "Mid-level positions for experienced software engineers"
   query: >
     (site:boards.greenhouse.io OR site:jobs.ashbyhq.com OR site:jobs.lever.co OR 
-    site:myworkdayjobs.com OR site:jobs.jobvite.com OR site:smartrecruiters.com) 
+    site:myworkdayjobs.com OR site:jobs.jobvite.com OR site:smartrecruiters.com OR
+    site:fa.oraclecloud.com/hcmUI/CandidateExperience OR site:eightfold.ai/careers OR
+    site:apply.workable.com OR site:recruitee.com)
     ("Software Engineer" OR "Application Developer" OR "SDE II" OR "SDE 2" OR 
     "MTS" OR "Member of Technical Staff" OR "Backend") 
     ("Distributed Systems" OR "Java" OR "Cloud") 
@@ -66,3 +70,7 @@ ats_platforms:
   - "jobs.jobvite.com"
   - "smartrecruiters.com"
   - "icims.com"
+  - "fa.oraclecloud.com"
+  - "eightfold.ai"
+  - "apply.workable.com"
+  - "recruitee.com"

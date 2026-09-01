@@ -1,0 +1,47 @@
+# Curated boards provide immediate coverage; previously discovered boards are
+# added dynamically from Supabase at runtime.
+targets:
+  greenhouse:
+    - identifier: spacex
+      company: SpaceX
+    - identifier: pinterest
+      company: Pinterest
+    - identifier: rubrik
+      company: Rubrik
+    - identifier: clickhouse
+      company: ClickHouse
+
+  ashby:
+    - identifier: cerebras
+      company: Cerebras Systems
+    - identifier: Crusoe
+      company: Crusoe Energy Systems
+    - identifier: ramp
+      company: Ramp
+    - identifier: socure
+      company: Socure
+  lever:
+    - identifier: zoox
+      company: Zoox
+    - identifier: shieldai
+      company: Shield AI
+    - identifier: veeva
+      company: Veeva Systems
+
+  smartrecruiters:
+    - identifier: Visa
+      company: Visa
+    - identifier: Canva
+      company: Canva
+    - identifier: Wabtec
+      company: Wabtec
+
+  workday:
+    - identifier: nvidia
+      company: NVIDIA
+      base_url: https://nvidia.wd5.myworkdayjobs.com
+      site: NVIDIAExternalCareerSite
+    - identifier: paypal
+      company: PayPal
+      base_url: https://paypal.wd1.myworkdayjobs.com
+      site: jobs

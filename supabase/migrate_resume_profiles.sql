@@ -32,13 +32,14 @@ SELECT
     jm.llama_reasoning,
     jm.is_notified,
     jm.matched_at,
-    ur.profile_name AS resume_profile
+    ur.profile_name AS resume_profile,
+    c.total_approvals,
+    c.h1b_approvals,
+    c.perm_approvals,
+    c.lca_approvals
 FROM public.job_matches jm
 JOIN public.jobs j ON jm.job_id = j.id
-JOIN public.companies c ON j.company_id = c.id
+LEFT JOIN public.companies c ON j.company_id = c.id
 JOIN public.user_resume ur ON jm.resume_id = ur.id
 WHERE j.is_active = TRUE
-  AND c.total_approvals >= 3
-  AND c.approval_rate >= 70
-  AND jm.llama_score >= 80
 ORDER BY jm.llama_score DESC, jm.matched_at DESC;

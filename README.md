@@ -5,28 +5,30 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
 ## How it works
 
 ```
- GitHub Actions (cron: 9 AM EST daily)
- ├─ scrape-newgrad-jobs ──┐
- ├─ scrape-midlevel-jobs ─┤
+ GitHub Actions (cron: weekday mornings)
+ ├─ scrape-jobs ──────────┐
  │                        ▼
  │                   match-jobs ──► send-notifications
  │
  └─ Pipeline per job:
-     1. SerpAPI → ATS URLs (Greenhouse, Lever, Ashby, Workday, SmartRecruiters)
-     2. Platform-specific extraction (JSON APIs where available, HTML fallback)
+     1. Poll structured ATS feeds (Greenhouse, Lever, Ashby, SmartRecruiters, Workday)
+     2. SerpAPI/Google discovery fallback for new and custom career sites
      3. Embed job text → 384-dim vector (all-MiniLM-L6-v2)
      4. Store in Supabase (pgvector)
      5. Cosine similarity vs. resume embedding → top 50 candidates
      6. Groq GPT-OSS 20B rescoring → top 20 with reasoning
-     7. Fuzzy-match employer → DOL sponsorship data (approval rate, history)
-     8. Email digest: ranked matches with scores + sponsorship stats
+     7. Exclude JDs requiring citizenship/GC, clearance, no OPT, or no sponsorship
+     8. Attach DOL history as context (never as an eligibility requirement)
+     9. Email digest: ranked matches + explicit sponsorship-confidence label
 ```
 
 ## Architecture
 
 ```
 etl/
-├── scrape_jobs.py              # 3-tier search: SerpAPI → Google CSE → Selenium
+├── ats_feeds.py                # Direct structured ATS adapters + normalization
+├── ats_feeds.yaml              # Curated job boards; DOL history is not required
+├── scrape_jobs.py              # Direct feeds + Google discovery fallback
 ├── process_sponsorship_data.py # DOL H-1B/PERM/LCA ETL → companies table
 └── search_queries.yaml         # Site-scoped Google dorks per experience level
 
@@ -54,15 +56,18 @@ supabase/
 
 ## Data flow
 
-**Scraping** — `etl/scrape_jobs.py` reads `search_queries.yaml` for site-scoped Google dorks targeting 7 ATS platforms. Extraction is platform-aware:
+**Scraping** — `etl/scrape_jobs.py` first polls structured feeds for curated and safely learned boards, then uses the site-scoped searches in `search_queries.yaml` to discover additional listings. Boards from companies with zero DOL approvals are eligible when the board slug matches the company brand. A seven-day overlap protects against missed weekday runs; canonical ATS IDs/URLs prevent duplicates.
+
+**Work authorization** — The current JD is evaluated before DOL history. Roles are excluded when they explicitly require U.S. citizenship/permanent residence, a security clearance, reject OPT/STEM OPT, or state that sponsorship is unavailable. A plain “authorized to work in the U.S.” requirement remains eligible for a candidate with current OPT/STEM OPT. DOL records are shown only as historical evidence, so startups with no filings remain visible.
 
 | Platform | Method | Why |
 |----------|--------|-----|
-| Greenhouse | REST API (`boards-api.greenhouse.io/v1/boards/{co}/jobs/{id}`) | HTML is JS-rendered |
-| Ashby | GraphQL API (`jobs.ashbyhq.com/api/non-user-graphql`) | HTML is JS-rendered |
-| Lever | HTML scraping (`div.posting-headline`, `div.section-wrapper`) | Server-rendered |
-| SmartRecruiters | `<title>` tag + meta extraction | Partial SSR |
-| Workday, iCIMS, Jobvite | Generic HTML fallback | Varies |
+| Greenhouse | Public board REST feed | Full structured board polling |
+| Ashby | Public posting API | Full structured board polling |
+| Lever | Public postings API | Paginated structured polling |
+| SmartRecruiters | Public postings + detail APIs | Structured list/detail polling |
+| Workday | Public CXS list/detail endpoints | Structured enterprise-board polling |
+| Oracle, Eightfold, Workable, Recruitee, custom sites | Search discovery + schema.org `JobPosting` | Coverage outside direct adapters |
 
 **Matching** — `rag/match_jobs.py` runs a two-stage retrieval pipeline:
 1. **Recall**: cosine similarity (pgvector IVFFlat index) between resume and job embeddings at configurable `MATCH_THRESHOLD` (default `0.40`) → top 50
@@ -73,7 +78,7 @@ supabase/
 - PERM Disclosure Data (Excel, ~83MB) — certified/denied/withdrawn cases
 - LCA Disclosure Data (Excel) — certified/denied cases
 
-Aggregated into a `companies` table (18,385 employers with >= 3 total approvals). Jobs are fuzzy-matched to DOL employers via `ILIKE` prefix search, preferring the entry with the highest approval count.
+Aggregated into the `companies` table. Jobs are fuzzy-matched to DOL employers via `ILIKE` prefix search, preferring the entry with the highest approval count. A missing match or zero approvals is labeled “no DOL history found,” not rejected. The current schema stores cumulative history, so the digest does not claim that an individual company filed recently.
 
 ## Database schema
 
@@ -218,12 +223,11 @@ Go to repo Settings → Secrets and variables → Actions. Add:
 
 ### Automated (GitHub Actions)
 
-The `daily-jobs.yml` workflow runs at 9 AM EST:
+The `daily-jobs.yml` workflow runs Monday through Friday at 14:00 UTC:
 
-1. **scrape-newgrad-jobs** — scrapes up to 25 new grad listings (parallel)
-2. **scrape-midlevel-jobs** — scrapes up to 25 mid-level listings (parallel)
-3. **match-jobs** — vector search + LLM scoring against resume (sequential)
-4. **send-notifications** — email digest of matches scoring >= 80 (sequential)
+1. **scrape-jobs** — polls direct feeds with a seven-day overlap and discovers extra ATS URLs, selecting up to 100 diverse jobs
+2. **match-jobs** — vector search + LLM scoring against active resume profiles
+3. **send-notifications** — email digest of matches scoring >= 60
 
 Trigger manually from the Actions tab or via CLI:
 
@@ -234,9 +238,8 @@ gh workflow run "Daily Job Scraping and Matching"
 ### Local
 
 ```bash
-# Scrape jobs
-python etl/scrape_jobs.py --level newgrad --max-jobs 25
-python etl/scrape_jobs.py --level midlevel --max-jobs 25
+# Poll all configured feeds and run discovery fallback
+python etl/scrape_jobs.py --level all --max-jobs 100 --lookback-days 7
 
 # Match against resume
 python rag/match_jobs.py
@@ -258,7 +261,7 @@ python agents/mcp_server.py
 | Groq | Account/model-specific | LLM scoring (2s sleep between calls) |
 | GitHub Actions | 2,000 min/month | ~5 min/run × 30 days = 150 min |
 | Supabase | 500MB DB, pgvector | 18K companies + jobs fits comfortably |
-| SerpAPI | 250 searches/month | 2 searches/day × 30 = 60 |
+| SerpAPI | 250 searches/month | Discovery fallback only; two searches per weekday run |
 | sentence-transformers | Local, unlimited | ~3s model load, <50ms/embedding |
 | **Total** | | **$0/month** |
 
@@ -268,9 +271,9 @@ python agents/mcp_server.py
 
 **Groq rate limit errors** — The pipeline sleeps 2.5s between scoring calls by default. Tune `GROQ_REQUEST_DELAY_SECONDS` or reduce `MAX_DAILY_MATCHES` if your model-specific limits are lower.
 
-**0% approval rate on all jobs** — Sponsorship data hasn't been loaded. Run `python etl/process_sponsorship_data.py`. The fuzzy matcher requires company names in the `companies` table to link against.
+**0% approval rate on all jobs** — Sponsorship data may not be loaded or the employers may have no matching DOL history. Run `python etl/process_sponsorship_data.py`; zero-history jobs remain eligible and are labeled clearly in the digest.
 
-**No jobs extracted** — Some ATS platforms (Workday, iCIMS) are fully JS-rendered and may return empty descriptions. Greenhouse and Ashby use API-based extraction and are the most reliable.
+**No jobs extracted** — Direct-feed failures are isolated per board and logged. Check whether a company changed its board identifier; search discovery can still recover supported schema.org postings.
 
 **GitHub Actions failing** — Check that all required secrets are configured. The workflow does not install Chrome/Selenium — extraction is API-based.
 

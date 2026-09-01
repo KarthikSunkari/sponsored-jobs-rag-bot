@@ -6,6 +6,7 @@ import sys
 import time
 import hashlib
 import argparse
+import json
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -20,7 +21,17 @@ from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
 from utils.serpapi_client import get_serpapi_client
 from utils.google_search import get_google_search_client
-from utils.job_location import assess_us_job_location
+from utils.job_location import assess_sponsorship_language, assess_us_job_location
+from etl.ats_feeds import (
+    deduplicate_jobs,
+    discover_targets,
+    fetch_all_targets,
+    is_recent,
+    load_seed_targets,
+    matches_job_level,
+    merge_targets,
+    select_diverse_jobs,
+)
 
 # Import Selenium components (only used as fallback)
 try:
@@ -33,6 +44,13 @@ try:
 except ImportError:
     SELENIUM_AVAILABLE = False
     print("⚠️  Selenium not available, will use API only")
+
+
+ATS_URL_MARKERS = [
+    "greenhouse.io", "ashbyhq.com", "lever.co", "myworkdayjobs.com",
+    "jobvite.com", "smartrecruiters.com", "icims.com", "oraclecloud.com",
+    "eightfold.ai", "apply.workable.com", "recruitee.com", "successfactors.com",
+]
 
 
 def load_search_queries() -> Dict:
@@ -61,16 +79,11 @@ def google_search_jobs_api(query: str, max_results: int = 20) -> List[str]:
         print("⚠️  API not configured, will use Selenium fallback")
         return []
 
-    ats_platforms = [
-        "greenhouse.io", "ashbyhq.com", "lever.co",
-        "myworkdayjobs.com", "jobvite.com", "smartrecruiters.com", "icims.com"
-    ]
-
     try:
         results = api_client.search_jobs(query, max_results=max_results)
         urls = [
             r["link"] for r in results
-            if r.get("link") and any(p in r["link"] for p in ats_platforms)
+            if r.get("link") and any(p in r["link"] for p in ATS_URL_MARKERS)
         ]
 
         if urls:
@@ -154,10 +167,7 @@ def google_search_jobs_selenium(query: str, max_results: int = 20, headless: boo
             try:
                 url = result.get_attribute("href")
                 if url and url.startswith("http") and "google.com" not in url:
-                    if any(platform in url for platform in [
-                        "greenhouse.io", "ashbyhq.com", "lever.co",
-                        "myworkdayjobs.com", "jobvite.com", "smartrecruiters.com", "icims.com"
-                    ]):
+                    if any(platform in url for platform in ATS_URL_MARKERS):
                         job_urls.append(url)
                         if len(job_urls) >= max_results:
                             break
@@ -190,12 +200,6 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
     Returns:
         List of job URLs
     """
-    # ATS platforms we care about
-    ats_platforms = [
-        "greenhouse.io", "ashbyhq.com", "lever.co",
-        "myworkdayjobs.com", "jobvite.com", "smartrecruiters.com", "icims.com"
-    ]
-
     # Tier 1: Try SerpAPI first (most reliable)
     serpapi_client = get_serpapi_client()
     if serpapi_client.api_key:
@@ -207,7 +211,7 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
             # Filter to ATS platform URLs only
             urls = [
                 r["link"] for r in results
-                if r.get("link") and any(p in r["link"] for p in ats_platforms)
+                if r.get("link") and any(p in r["link"] for p in ATS_URL_MARKERS)
             ]
 
             if urls:
@@ -231,7 +235,7 @@ def google_search_jobs(query: str, max_results: int = 20, headless: bool = True)
             # Filter to ATS platform URLs only
             urls = [
                 r["link"] for r in results
-                if r.get("link") and any(p in r["link"] for p in ats_platforms)
+                if r.get("link") and any(p in r["link"] for p in ATS_URL_MARKERS)
             ]
 
             if urls:
@@ -377,6 +381,54 @@ def _extract_html_generic(url: str) -> Optional[Dict]:
         resp.raise_for_status()
         soup = BeautifulSoup(resp.content, 'html.parser')
 
+        # Prefer schema.org JobPosting data when custom/enterprise career
+        # sites expose it. This covers many Oracle, Eightfold, Workable, and
+        # custom portals without brittle CSS selectors.
+        for script in soup.find_all('script', {'type': 'application/ld+json'}):
+            try:
+                payload = json.loads(script.string or script.get_text() or '{}')
+                candidates = payload if isinstance(payload, list) else [payload]
+                if isinstance(payload, dict) and isinstance(payload.get('@graph'), list):
+                    candidates.extend(payload['@graph'])
+                posting = next(
+                    (
+                        item for item in candidates
+                        if isinstance(item, dict)
+                        and item.get('@type') == 'JobPosting'
+                    ),
+                    None,
+                )
+                if not posting:
+                    continue
+
+                organization = posting.get('hiringOrganization') or {}
+                raw_locations = posting.get('jobLocation') or []
+                if isinstance(raw_locations, dict):
+                    raw_locations = [raw_locations]
+                locations = []
+                for raw_location in raw_locations:
+                    address = (raw_location or {}).get('address') or {}
+                    if isinstance(address, str):
+                        locations.append(address)
+                    else:
+                        locations.append(', '.join(filter(None, [
+                            address.get('addressLocality'),
+                            address.get('addressRegion'),
+                            address.get('addressCountry'),
+                        ])))
+                return {
+                    'title': posting.get('title', ''),
+                    'company': organization.get('name', '') if isinstance(organization, dict) else '',
+                    'location': '; '.join(filter(None, locations)),
+                    'description': BeautifulSoup(
+                        posting.get('description', ''), 'html.parser'
+                    ).get_text(' ', strip=True),
+                    'posted_date': posting.get('datePosted'),
+                    'source': 'structured_job_posting',
+                }
+            except (TypeError, ValueError, StopIteration):
+                continue
+
         title = None
         company = None
         location = None
@@ -514,6 +566,18 @@ def save_job_to_db(job_data: Dict) -> bool:
         if existing.data:
             print(f"  ⏭️  Already exists: {job_data['title']}")
             return False
+
+        # Existing search-discovered URLs may contain tracking parameters,
+        # while direct feeds return canonical URLs. Reuse the ATS posting ID
+        # to avoid inserting the same requisition under both variants.
+        source_job_id = str(job_data.get('source_job_id') or '')
+        if source_job_id:
+            identity_match = client.client.table("jobs").select("id").like(
+                "job_url", f"%{source_job_id}%"
+            ).limit(1).execute()
+            if identity_match.data:
+                print(f"  ⏭️  Already exists by ATS ID: {job_data['title']}")
+                return False
         
         company_data = None
         company_id = None
@@ -530,7 +594,7 @@ def save_job_to_db(job_data: Dict) -> bool:
             'job_url': job_data['job_url'],
             'url_hash': job_data['url_hash'],
             'source': job_data.get('source', 'google_search'),
-            'posted_date': None,
+            'posted_date': job_data.get('posted_date'),
             'is_active': True
         }
         
@@ -559,55 +623,127 @@ def save_job_to_db(job_data: Dict) -> bool:
         return False
 
 
-def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True) -> int:
-    """Main scraping function with hybrid API/Selenium approach."""
+def get_known_feed_jobs() -> List[Dict]:
+    """Load prior ATS URLs so their complete public boards can be polled."""
+    try:
+        client = get_supabase_client()
+        result = client.client.table("jobs").select(
+            "job_url, companies(employer_name, total_approvals)"
+        ).execute()
+        return result.data or []
+    except Exception as exc:
+        print(f"⚠️  Could not discover prior ATS boards: {exc}")
+        return []
+
+
+def collect_direct_feed_jobs(level: str, lookback_days: int) -> List[Dict]:
+    """Fetch structured feeds from curated and previously discovered boards."""
+    seed_targets = load_seed_targets()
+    discovered_targets = discover_targets(get_known_feed_jobs())
+    targets = merge_targets(seed_targets, discovered_targets)
+    print(
+        f"Polling {len(targets)} direct ATS boards "
+        f"({len(seed_targets)} curated, {len(discovered_targets)} discovered)..."
+    )
+    jobs, errors = fetch_all_targets(targets)
+    print(f"Direct feeds returned {len(jobs)} published jobs; {len(errors)} board error(s)")
+
+    filtered = []
+    for job in jobs:
+        if not matches_job_level(job.get("title", ""), level):
+            continue
+        if not is_recent(job, lookback_days):
+            continue
+        eligible, reason = assess_us_job_location(
+            job.get("location", ""), job.get("description", "")
+        )
+        if not eligible:
+            continue
+        sponsor_eligible, sponsor_reason = assess_sponsorship_language(
+            job.get("description", ""), job.get("title", "")
+        )
+        if not sponsor_eligible:
+            continue
+        filtered.append(job)
+    print(
+        f"Direct feeds retained {len(filtered)} recent, US-eligible, "
+        f"early/mid-career engineering jobs"
+    )
+    return filtered
+
+
+def scrape_jobs(
+    level: str,
+    max_jobs: int = 20,
+    headless: bool = True,
+    lookback_days: int = 7,
+) -> int:
+    """Fetch direct ATS feeds, then use search to discover additional boards."""
     print("=" * 60)
     print(f"Hybrid Job Scraper - {level.upper()}")
     print("=" * 60)
     
     config = load_search_queries()
     
-    if level not in config:
+    if level not in {"newgrad", "midlevel", "all"}:
         print(f"❌ Invalid level: {level}")
         return 0
-    
-    query_config = config[level]
-    query = query_config['query']
-    
-    print(f"\n[1/3] Searching for {level} jobs (past 24 hours)...")
-    print(f"Strategy: API first, Selenium fallback")
-    
-    job_urls = google_search_jobs(query, max_results=max_jobs * 2, headless=headless)
+
+    print(f"\n[1/4] Polling direct ATS feeds (past {lookback_days} days)...")
+    direct_jobs = collect_direct_feed_jobs(level, lookback_days)
+
+    print("\n[2/4] Searching for newly discovered ATS postings...")
+    levels = ["newgrad", "midlevel"] if level == "all" else [level]
+    job_urls = []
+    for search_level in levels:
+        query = config[search_level]['query']
+        job_urls.extend(
+            google_search_jobs(query, max_results=max_jobs, headless=headless)
+        )
+    job_urls = list(dict.fromkeys(job_urls))
     print(f"Found {len(job_urls)} job URLs")
-    
-    if not job_urls:
-        print("❌ No jobs found")
-        return 0
-    
-    print(f"\n[2/3] Extracting job details...")
-    jobs = []
-    for url in tqdm(job_urls[:max_jobs * 2], desc="Extracting"):
+
+    print("\n[3/4] Extracting search results and combining sources...")
+    searched_jobs = []
+    for url in tqdm(job_urls[:max_jobs], desc="Extracting"):
         job_data = extract_job_details(url)
         if job_data:
+            if not matches_job_level(job_data.get("title", ""), level):
+                continue
             eligible, reason = assess_us_job_location(
                 job_data.get("location", ""),
                 job_data.get("description", ""),
             )
             if eligible:
-                jobs.append(job_data)
+                sponsor_eligible, sponsor_reason = assess_sponsorship_language(
+                    job_data.get("description", ""), job_data.get("title", "")
+                )
+                if sponsor_eligible:
+                    searched_jobs.append(job_data)
+                else:
+                    print(
+                        f"  🛂 Skipped non-sponsoring role: "
+                        f"{job_data.get('title', 'Untitled')} — {sponsor_reason}"
+                    )
             else:
                 print(
                     f"  🌎 Skipped non-US role: {job_data.get('title', 'Untitled')} "
                     f"({job_data.get('location', 'unknown')}) — {reason}"
                 )
         time.sleep(1)
-        
-        if len(jobs) >= max_jobs:
-            break
-    
-    print(f"Extracted {len(jobs)} jobs")
-    
-    print(f"\n[3/3] Saving to database...")
+
+    jobs = deduplicate_jobs(direct_jobs + searched_jobs)
+    jobs = select_diverse_jobs(jobs, max_jobs=max_jobs, max_per_company=10)
+    print(
+        f"Combined {len(direct_jobs)} feed jobs and {len(searched_jobs)} "
+        f"search jobs into {len(jobs)} unique candidates"
+    )
+
+    if not jobs:
+        print("❌ No eligible jobs found from feeds or search")
+        return 0
+
+    print("\n[4/4] Saving to database...")
     saved_count = 0
     for job in tqdm(jobs, desc="Saving"):
         if save_job_to_db(job):
@@ -616,6 +752,7 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True) -> int:
     print("\n" + "=" * 60)
     print(f"✅ Completed!")
     print(f"URLs found: {len(job_urls)}")
+    print(f"Direct-feed candidates: {len(direct_jobs)}")
     print(f"Jobs extracted: {len(jobs)}")
     print(f"Jobs saved: {saved_count}")
     print(f"Duplicates: {len(jobs) - saved_count}")
@@ -625,12 +762,19 @@ def scrape_jobs(level: str, max_jobs: int = 20, headless: bool = True) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hybrid Google job scraper (API + Selenium)")
-    parser.add_argument("--level", type=str, required=True, choices=["newgrad", "midlevel"])
+    parser.add_argument(
+        "--level", type=str, required=True,
+        choices=["newgrad", "midlevel", "all"],
+    )
     parser.add_argument("--max-jobs", type=int, default=20)
+    parser.add_argument("--lookback-days", type=int, default=7)
     parser.add_argument("--show-browser", action="store_true")
     
     args = parser.parse_args()
     extracted_count = scrape_jobs(
-        args.level, args.max_jobs, headless=not args.show_browser
+        args.level,
+        args.max_jobs,
+        headless=not args.show_browser,
+        lookback_days=args.lookback_days,
     )
     raise SystemExit(0 if extracted_count else 1)

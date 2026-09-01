@@ -8,12 +8,11 @@ This system uses Docker containerization for consistent Selenium execution acros
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              GitHub Actions (Daily 9 AM EST)            │
+│           GitHub Actions (Weekdays at 14:00 UTC)        │
 ├─────────────────────────────────────────────────────────┤
-│  1. Scrape New Grad Jobs (25 jobs, past 24h)          │
-│  2. Scrape Mid-Level Jobs (25 jobs, past 24h)         │
-│  3. Match Jobs (RAG + Llama-3)                         │
-│  4. Send Email Notifications (top matches)             │
+│  1. Poll direct ATS feeds + discovery (100 jobs)        │
+│  2. Match Jobs (pgvector + Groq)                        │
+│  3. Send Email Notifications (score >= 60)              │
 └─────────────────────────────────────────────────────────┘
                           ↓
 ┌─────────────────────────────────────────────────────────┐
