@@ -5,7 +5,7 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
 ## How it works
 
 ```
- GitHub Actions (cron: weekday mornings)
+ GitHub Actions (cron: daily at 14:00 UTC)
  ├─ scrape-jobs ──────────┐
  │                        ▼
  │                   match-jobs ──► send-notifications
@@ -56,7 +56,7 @@ supabase/
 
 ## Data flow
 
-**Scraping** — `etl/scrape_jobs.py` first polls structured feeds for curated and safely learned boards, then uses the site-scoped searches in `search_queries.yaml` to discover additional listings. Boards from companies with zero DOL approvals are eligible when the board slug matches the company brand. A seven-day overlap protects against missed weekday runs; canonical ATS IDs/URLs prevent duplicates.
+**Scraping** — `etl/scrape_jobs.py` first polls structured feeds for curated and safely learned boards, then uses the site-scoped searches in `search_queries.yaml` to discover additional listings. Boards from companies with zero DOL approvals are eligible when the board slug matches the company brand. A seven-day overlap protects against transient failed or missed runs; canonical ATS IDs/URLs prevent duplicates.
 
 **Work authorization** — The current JD is evaluated before DOL history. Roles are excluded when they explicitly require U.S. citizenship/permanent residence, a security clearance, reject OPT/STEM OPT, or state that sponsorship is unavailable. A plain “authorized to work in the U.S.” requirement remains eligible for a candidate with current OPT/STEM OPT. DOL records are shown only as historical evidence, so startups with no filings remain visible.
 
@@ -223,7 +223,7 @@ Go to repo Settings → Secrets and variables → Actions. Add:
 
 ### Automated (GitHub Actions)
 
-The `daily-jobs.yml` workflow runs Monday through Friday at 14:00 UTC:
+The `daily-jobs.yml` workflow runs every day at 14:00 UTC:
 
 1. **scrape-jobs** — polls direct feeds with a seven-day overlap and discovers extra ATS URLs, selecting up to 100 diverse jobs
 2. **match-jobs** — vector search + LLM scoring against active resume profiles
@@ -261,7 +261,7 @@ python agents/mcp_server.py
 | Groq | Account/model-specific | LLM scoring (2s sleep between calls) |
 | GitHub Actions | 2,000 min/month | ~5 min/run × 30 days = 150 min |
 | Supabase | 500MB DB, pgvector | 18K companies + jobs fits comfortably |
-| SerpAPI | 250 searches/month | Discovery fallback only; two searches per weekday run |
+| SerpAPI | 250 searches/month | Discovery fallback only; two searches per daily run (~60/month) |
 | sentence-transformers | Local, unlimited | ~3s model load, <50ms/embedding |
 | **Total** | | **$0/month** |
 
