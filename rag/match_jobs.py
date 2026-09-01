@@ -14,7 +14,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from utils.supabase_client import get_supabase_client
 from rag.embedding_service import get_embedding_service
 from agents.groq_client import GroqClient
-from utils.job_location import assess_us_job_location
+from utils.job_location import assess_sponsorship_language, assess_us_job_location
 
 
 def get_resume_profiles(profile_name: Optional[str] = None) -> List[Dict]:
@@ -56,13 +56,16 @@ def find_similar_jobs(
             return []
 
         job_ids = [j["job_id"] for j in top_jobs]
-        jobs_result = client.client.table("jobs").select(
-            "*, companies(employer_name, approval_rate, total_approvals)"
-        ).in_("id", job_ids).eq("is_active", True).execute()
+        # Read the JD first. Work-authorization eligibility must not depend on
+        # whether this employer already appears in historical DOL filings.
+        jobs_result = client.client.table("jobs").select("*").in_(
+            "id", job_ids
+        ).eq("is_active", True).execute()
 
         jobs_by_id = {job["id"]: job for job in jobs_result.data}
         jobs_with_scores = []
         excluded_locations = []
+        excluded_authorization = []
         for match in top_jobs:
             job = jobs_by_id.get(match["job_id"])
             if job:
@@ -75,6 +78,16 @@ def find_similar_jobs(
                         f"{job.get('title', 'Untitled')} ({job.get('location', 'unknown')})"
                     )
                     continue
+                authorization_eligible, authorization_reason = (
+                    assess_sponsorship_language(
+                        job.get("description", ""), job.get("title", "")
+                    )
+                )
+                if not authorization_eligible:
+                    excluded_authorization.append(
+                        f"{job.get('title', 'Untitled')} ({authorization_reason})"
+                    )
+                    continue
                 job["cosine_similarity"] = float(match["similarity"])
                 jobs_with_scores.append(job)
         if excluded_locations:
@@ -82,6 +95,33 @@ def find_similar_jobs(
                 f"Location filter excluded {len(excluded_locations)} non-US-only "
                 f"candidate(s): {'; '.join(excluded_locations)}"
             )
+
+        if excluded_authorization:
+            print(
+                f"JD authorization filter excluded {len(excluded_authorization)} "
+                f"candidate(s): {'; '.join(excluded_authorization)}"
+            )
+
+        # Only after the JD passes location and work-authorization checks do we
+        # attach DOL history. Missing history remains an allowed, explicit state.
+        company_ids = list(
+            {
+                job["company_id"]
+                for job in jobs_with_scores
+                if job.get("company_id") is not None
+            }
+        )
+        companies_by_id = {}
+        if company_ids:
+            companies_result = client.client.table("companies").select(
+                "id,employer_name,approval_rate,total_approvals,h1b_approvals,"
+                "perm_approvals,lca_approvals"
+            ).in_("id", company_ids).execute()
+            companies_by_id = {
+                company["id"]: company for company in (companies_result.data or [])
+            }
+        for job in jobs_with_scores:
+            job["companies"] = companies_by_id.get(job.get("company_id"), {})
         return jobs_with_scores
 
     except Exception as e:

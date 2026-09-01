@@ -191,12 +191,6 @@ def discover_targets(known_jobs: Iterable[Dict]) -> List[FeedTarget]:
         parts = [part for part in parsed.path.split("/") if part]
         company_data = row.get("companies") or {}
         company = company_data.get("employer_name") or row.get("company") or ""
-        approvals = company_data.get("total_approvals")
-        # Dynamic board expansion is most useful for companies already linked
-        # to DOL records. Curated targets remain the escape hatch for known
-        # sponsors whose public brand does not match its legal employer name.
-        if approvals is not None and approvals <= 0:
-            continue
         target = None
 
         if "greenhouse.io" in host and parts:
@@ -221,7 +215,8 @@ def discover_targets(known_jobs: Iterable[Dict]) -> List[FeedTarget]:
         if target:
             # Historical rows can occasionally be linked to the wrong legal
             # employer. Only auto-expand a board when its slug agrees with the
-            # sponsor's brand; curated targets cover legitimate name changes.
+            # company brand. DOL history is intentionally not required: newer
+            # startups can be eligible based on their current job description.
             if _board_company_key(target.identifier) == _board_company_key(company):
                 targets[target.key] = target
     return list(targets.values())

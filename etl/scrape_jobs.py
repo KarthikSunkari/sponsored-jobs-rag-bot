@@ -660,7 +660,7 @@ def collect_direct_feed_jobs(level: str, lookback_days: int) -> List[Dict]:
         if not eligible:
             continue
         sponsor_eligible, sponsor_reason = assess_sponsorship_language(
-            job.get("description", "")
+            job.get("description", ""), job.get("title", "")
         )
         if not sponsor_eligible:
             continue
@@ -716,7 +716,7 @@ def scrape_jobs(
             )
             if eligible:
                 sponsor_eligible, sponsor_reason = assess_sponsorship_language(
-                    job_data.get("description", "")
+                    job_data.get("description", ""), job_data.get("title", "")
                 )
                 if sponsor_eligible:
                     searched_jobs.append(job_data)

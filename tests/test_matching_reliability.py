@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 from agents.groq_client import GroqClient
-from rag.match_jobs import score_with_llama
+from rag.match_jobs import find_similar_jobs, score_with_llama
 from utils.supabase_client import SupabaseClient
 
 
@@ -81,22 +81,76 @@ def test_vector_threshold_is_forwarded_to_rpc():
     )
 
 
-def test_notification_matches_are_hydrated_with_job_descriptions():
+def test_notification_matches_include_zero_history_companies_and_descriptions():
     wrapper = SupabaseClient.__new__(SupabaseClient)
     wrapper.client = MagicMock()
     matches_query = MagicMock()
-    jobs_query = MagicMock()
-    wrapper.client.table.side_effect = [matches_query, jobs_query]
-    matches_query.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
-        {"id": 10, "job_id": 7, "location": "Remote - India"}
-    ]
-    jobs_query.select.return_value.in_.return_value.execute.return_value.data = [
+    wrapper.client.table.return_value = matches_query
+    matches_query.select.return_value.eq.return_value.gte.return_value.order.return_value.execute.return_value.data = [
         {
-            "id": 7,
-            "description": "Available in the United States and India.",
+            "id": 10,
+            "job_id": 7,
+            "llama_score": 82,
+            "jobs": {
+                "title": "AI Engineer",
+                "location": "Remote - US",
+                "job_url": "https://example.com/job/7",
+                "description": "Available in the United States.",
+                "companies": {
+                    "employer_name": "New Startup",
+                    "approval_rate": 0,
+                    "total_approvals": 0,
+                },
+            },
+            "user_resume": {"profile_name": "Agentic AI"},
         }
     ]
 
     matches = wrapper.get_unnotified_matches()
 
-    assert matches[0]["description"] == "Available in the United States and India."
+    assert matches[0]["description"] == "Available in the United States."
+    assert matches[0]["employer_name"] == "New Startup"
+    assert matches[0]["total_approvals"] == 0
+    assert matches[0]["resume_profile"] == "Agentic AI"
+
+
+def test_jd_authorization_filter_runs_before_dol_history_lookup():
+    wrapper = MagicMock()
+    wrapper.search_similar_jobs.return_value = [
+        {"job_id": 1, "similarity": 0.9},
+        {"job_id": 2, "similarity": 0.8},
+    ]
+    jobs_query = MagicMock()
+    companies_query = MagicMock()
+    wrapper.client.table.side_effect = [jobs_query, companies_query]
+    jobs_query.select.return_value.in_.return_value.eq.return_value.execute.return_value.data = [
+        {
+            "id": 1,
+            "company_id": 101,
+            "title": "Cleared Software Engineer",
+            "location": "Austin, TX",
+            "description": "Active Secret security clearance is required.",
+        },
+        {
+            "id": 2,
+            "company_id": 202,
+            "title": "AI Engineer",
+            "location": "Remote - US",
+            "description": "Must be authorized to work in the United States.",
+        },
+    ]
+    companies_query.select.return_value.in_.return_value.execute.return_value.data = [
+        {
+            "id": 202,
+            "employer_name": "New Startup",
+            "total_approvals": 0,
+            "approval_rate": 0,
+        }
+    ]
+
+    with patch("rag.match_jobs.get_supabase_client", return_value=wrapper):
+        jobs = find_similar_jobs([0.1, 0.2])
+
+    assert [job["id"] for job in jobs] == [2]
+    assert jobs[0]["companies"]["employer_name"] == "New Startup"
+    companies_query.select.return_value.in_.assert_called_once_with("id", [202])

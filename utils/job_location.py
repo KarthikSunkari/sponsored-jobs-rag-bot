@@ -56,7 +56,14 @@ _FOREIGN_LOCATION_PATTERNS = (
     r"south america)\b",
     r"\b(?:united kingdom|u\.?k\.?|london|manchester|ireland|dublin)\b",
     r"\b(?:canada|toronto|vancouver|montreal|ottawa)\b",
-    r"\b(?:europe|emea|apac|asia|australia|singapore|japan|tokyo|mexico)\b",
+    r"\b(?:ontario|quebec|alberta|british columbia|nova scotia|manitoba|"
+    r"saskatchewan|new brunswick|newfoundland and labrador)\b",
+    r"\b(?:europe|emea|apac|asia|australia|new zealand|singapore|japan|tokyo|"
+    r"mexico|indonesia|china|netherlands|spain|portugal|germany|france|sweden|"
+    r"denmark|finland|norway|switzerland|austria|belgium|poland|czechia|"
+    r"czech republic|romania|bulgaria|ukraine|lithuania|south korea|malaysia|"
+    r"philippines|thailand|vietnam|taiwan|hong kong|israel|united arab emirates|"
+    r"uae|saudi arabia|south africa|turkey|argentina|colombia|chile|peru)\b",
     r"\b(?:berlin|munich|hamburg|frankfurt|amsterdam|stockholm|copenhagen|"
     r"helsinki|oslo|paris|madrid|barcelona|lisbon|porto|prague|warsaw|"
     r"zurich|geneva|vienna|brussels|sofia|bucharest|kyiv|vilnius|seoul)\b",
@@ -99,6 +106,24 @@ def assess_us_job_location(location: str = "", description: str = "") -> Tuple[b
     ):
         return False, "non-US-only location"
 
+    # Country codes can collide with US state codes (for example Berlin, DE).
+    # Treat a same-segment foreign city/country + state-code-only US signal as
+    # foreign, but retain a separate US segment such as "Bengaluru; Redmond, WA".
+    segments = [part.strip() for part in re.split(r"[;/|]", location) if part.strip()]
+    ambiguous_foreign_segments = [
+        segment
+        for segment in segments
+        if _matches_any(segment, _FOREIGN_LOCATION_PATTERNS)
+        and _matches_any(segment, (_US_LOCATION_PATTERNS[-1],))
+        and not _matches_any(segment, _US_LOCATION_PATTERNS[:-1])
+    ]
+    if ambiguous_foreign_segments:
+        other_segments = " ; ".join(
+            segment for segment in segments if segment not in ambiguous_foreign_segments
+        )
+        if not _matches_any(other_segments, _US_LOCATION_PATTERNS):
+            return False, "non-US-only location"
+
     if _matches_any(location, _US_LOCATION_PATTERNS):
         return True, "explicit US availability"
 
@@ -128,17 +153,114 @@ def is_us_job_eligible(location: str = "", description: str = "") -> bool:
     return assess_us_job_location(location, description)[0]
 
 
-_NO_SPONSORSHIP_PATTERNS = (
-    r"\b(?:must|should)\s+(?:already\s+)?be\s+(?:legally\s+)?authorized\b.{0,80}\bwithout\b.{0,30}\bsponsorship\b",
-    r"\b(?:without|no)\s+(?:current\s+or\s+future\s+)?(?:visa\s+)?sponsorship\b",
-    r"\b(?:will|can|does)\s+not\s+(?:provide|offer)\b.{0,25}\bsponsorship\b",
-    r"\b(?:unable|not able)\s+to\s+sponsor\b",
+_WORK_AUTHORIZATION_EXCLUSIONS = (
+    (
+        (
+            r"\b(?:must|should)\s+(?:already\s+)?be\s+(?:legally\s+)?authorized\b"
+            r".{0,80}\bwithout\b.{0,30}\bsponsorship\b|"
+            r"\b(?:will|can|does|do)\s+not\s+(?:provide|offer|support)\b.{0,35}\bsponsorship\b|"
+            r"\b(?:unable|not able)\s+to\s+(?:sponsor|(?:provide|offer|support)\s+"
+            r"(?:visa\s+)?sponsorship)\b|"
+            r"\b(?:cannot|can't)\s+(?:sponsor|(?:provide|offer|support)\s+"
+            r"(?:visa\s+)?sponsorship)\b|"
+            r"\bno\s+(?:visa\s+)?sponsorship\b(?!\s+required)|"
+            r"\b(?:visa|immigration|employment)\s+sponsorship\s+(?:is\s+)?"
+            r"(?:not available|unavailable|not offered|not provided)|"
+            r"\b(?:this|the)\s+(?:role|position|job)\s+(?:is\s+)?not\s+eligible\b"
+            r".{0,35}\bsponsorship\b"
+        ),
+        "posting explicitly excludes visa sponsorship",
+    ),
+    (
+        (
+            r"\b(?:u\.?s\.?|united states)\s+citizenship\s+(?:is\s+)?required\b|"
+            r"\bmust\s+be\s+(?:a\s+)?(?:u\.?s\.?|united states)\s+citizens?\b|"
+            r"\b(?:only|solely)\s+(?:u\.?s\.?|united states)\s+citizens?\b|"
+            r"\b(?:u\.?s\.?\s+)?citizens?\s+(?:only|required)\b"
+        ),
+        "posting requires US citizenship",
+    ),
+    (
+        (
+            r"\b(?:green card|lawful permanent resident|permanent resident status)"
+            r"\s+(?:is\s+)?required\b|"
+            r"\bmust\s+be\b.{0,35}\b(?:green card holder|lawful permanent resident)\b|"
+            r"\b(?:citizens?|nationals?|lawful permanent residents?|green card holders?)"
+            r"(?:\s*(?:,|or|and)\s*(?:citizens?|nationals?|lawful permanent residents?|"
+            r"green card holders?))*\s+only\b|"
+            r"\bmust\s+(?:qualify|be eligible)\s+as\s+(?:a\s+)?u\.?s\.?\s+person\b|"
+            r"\b(?:u\.?s\.?\s+citizens?|green card holders?)\s+(?:or|and)\s+"
+            r"(?:u\.?s\.?\s+citizens?|green card holders?)\b|"
+            r"\b(?:must|required\s+to)\s+be\b.{0,100}\b(?:u\.?s\.?\s+person|"
+            r"u\.?s\.?\s+national|lawful permanent residents?|protected individual)\b"
+        ),
+        "posting requires citizenship or permanent-resident status",
+    ),
+    (
+        (
+            r"\b(?:active|current|existing)\b.{0,30}\b(?:security\s+)?clearance\b|"
+            r"\b(?:top secret|secret|ts/?sci)\b.{0,20}\b(?:security\s+)?clearance\b|"
+            r"\b(?:security\s+)?clearance\s+(?:is\s+)?required\b|"
+            r"\bmust\s+(?:hold|possess|maintain|obtain)\b.{0,40}\bclearance\b|"
+            r"\b(?:ability|eligible|eligibility)\s+to\s+(?:obtain|maintain)\b"
+            r".{0,40}\bclearance\b"
+        ),
+        "posting requires or conditions employment on a security clearance",
+    ),
+    (
+        (
+            r"\b(?:do|does|will)\s+not\s+(?:accept|consider|support)\b.{0,35}"
+            r"\b(?:stem\s+)?opt\b|"
+            r"\b(?:stem\s+)?opt\s+(?:candidates?|holders?)\s+(?:are\s+)?not\b|"
+            r"\b(?:stem\s+)?opt(?:/cpt|\s+or\s+cpt)?\s+(?:candidates?|holders?)"
+            r"\s+(?:will\s+)?not\s+be\s+(?:accepted|considered)\b|"
+            r"\bno\s+(?:stem\s+)?opt(?:\s+or\s+cpt)?\b|"
+            r"\b(?:not eligible|ineligible)\b.{0,35}\b(?:stem\s+)?opt\b"
+        ),
+        "posting explicitly excludes OPT/STEM OPT candidates",
+    ),
+)
+
+_EXPLICIT_SPONSORSHIP_PATTERNS = (
+    r"\b(?:visa|immigration|employment|h-?1b)\s+sponsorship\s+(?:is\s+)?"
+    r"(?:available|provided|offered|supported)\b",
+    r"\bwe\s+(?:will|can|may)\s+sponsor\b",
+    r"\b(?:eligible|considered)\s+for\s+(?:visa|h-?1b)\s+sponsorship\b",
+    r"\bh-?1b\s+(?:transfer|sponsorship)\b",
 )
 
 
-def assess_sponsorship_language(description: str = "") -> Tuple[bool, str]:
-    """Reject postings that explicitly say employment sponsorship is unavailable."""
-    text = description or ""
-    if _matches_any(text, _NO_SPONSORSHIP_PATTERNS):
-        return False, "posting explicitly excludes visa sponsorship"
-    return True, "no explicit sponsorship exclusion"
+def classify_sponsorship_language(
+    description: str = "", title: str = ""
+) -> Tuple[str, str]:
+    """Classify JD work-authorization language for an OPT/STEM OPT candidate.
+
+    DOL history is deliberately absent here. The current posting decides basic
+    eligibility; historical filings are presented later as supporting context.
+    """
+    if re.search(
+        r"\b(?:top secret|secret|ts/?sci)\b.{0,25}\bclearance\b|"
+        r"\bclearance\b.{0,25}\b(?:required|top secret|secret|ts/?sci)\b",
+        title or "",
+        flags=re.IGNORECASE,
+    ):
+        return "excluded", "job title requires or emphasizes a security clearance"
+
+    text = f"{title or ''}\n{description or ''}"
+    for pattern, reason in _WORK_AUTHORIZATION_EXCLUSIONS:
+        if re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL):
+            return "excluded", reason
+    if _matches_any(text, _EXPLICIT_SPONSORSHIP_PATTERNS):
+        return "explicit_sponsorship", "posting explicitly indicates sponsorship support"
+    return (
+        "not_specified",
+        "compatible with current OPT/STEM OPT unless the employer confirms otherwise",
+    )
+
+
+def assess_sponsorship_language(
+    description: str = "", title: str = ""
+) -> Tuple[bool, str]:
+    """Return whether the JD is viable for an OPT/STEM OPT candidate."""
+    status, reason = classify_sponsorship_language(description, title)
+    return status != "excluded", reason

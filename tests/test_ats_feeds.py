@@ -55,17 +55,17 @@ def test_targets_are_discovered_from_existing_job_urls():
     ) in targets
 
 
-def test_zero_approval_companies_do_not_expand_dynamic_boards():
+def test_zero_approval_companies_can_expand_matching_dynamic_boards():
     targets = discover_targets(
         [
             {
-                "job_url": "https://jobs.ashbyhq.com/aggregator/job-1",
-                "companies": {"employer_name": "Aggregator", "total_approvals": 0},
+                "job_url": "https://jobs.ashbyhq.com/newstartup/job-1",
+                "companies": {"employer_name": "New Startup", "total_approvals": 0},
             }
         ]
     )
 
-    assert targets == []
+    assert targets == [FeedTarget("ashby", "newstartup", "New Startup")]
 
 
 def test_dynamic_board_slug_must_match_sponsor_brand():

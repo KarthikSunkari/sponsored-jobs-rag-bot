@@ -17,8 +17,9 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
      4. Store in Supabase (pgvector)
      5. Cosine similarity vs. resume embedding → top 50 candidates
      6. Groq GPT-OSS 20B rescoring → top 20 with reasoning
-     7. Fuzzy-match employer → DOL sponsorship data (approval rate, history)
-     8. Email digest: ranked matches with scores + sponsorship stats
+     7. Exclude JDs requiring citizenship/GC, clearance, no OPT, or no sponsorship
+     8. Attach DOL history as context (never as an eligibility requirement)
+     9. Email digest: ranked matches + explicit sponsorship-confidence label
 ```
 
 ## Architecture
@@ -26,7 +27,7 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
 ```
 etl/
 ├── ats_feeds.py                # Direct structured ATS adapters + normalization
-├── ats_feeds.yaml              # Curated sponsor-backed job boards
+├── ats_feeds.yaml              # Curated job boards; DOL history is not required
 ├── scrape_jobs.py              # Direct feeds + Google discovery fallback
 ├── process_sponsorship_data.py # DOL H-1B/PERM/LCA ETL → companies table
 └── search_queries.yaml         # Site-scoped Google dorks per experience level
@@ -55,7 +56,9 @@ supabase/
 
 ## Data flow
 
-**Scraping** — `etl/scrape_jobs.py` first polls structured feeds for curated and safely learned sponsor-backed boards, then uses the site-scoped searches in `search_queries.yaml` to discover additional listings. A seven-day overlap protects against missed weekday runs; canonical ATS IDs/URLs prevent duplicates. Explicit foreign-only and no-sponsorship postings are filtered before embedding.
+**Scraping** — `etl/scrape_jobs.py` first polls structured feeds for curated and safely learned boards, then uses the site-scoped searches in `search_queries.yaml` to discover additional listings. Boards from companies with zero DOL approvals are eligible when the board slug matches the company brand. A seven-day overlap protects against missed weekday runs; canonical ATS IDs/URLs prevent duplicates.
+
+**Work authorization** — The current JD is evaluated before DOL history. Roles are excluded when they explicitly require U.S. citizenship/permanent residence, a security clearance, reject OPT/STEM OPT, or state that sponsorship is unavailable. A plain “authorized to work in the U.S.” requirement remains eligible for a candidate with current OPT/STEM OPT. DOL records are shown only as historical evidence, so startups with no filings remain visible.
 
 | Platform | Method | Why |
 |----------|--------|-----|
@@ -75,7 +78,7 @@ supabase/
 - PERM Disclosure Data (Excel, ~83MB) — certified/denied/withdrawn cases
 - LCA Disclosure Data (Excel) — certified/denied cases
 
-Aggregated into a `companies` table (18,385 employers with >= 3 total approvals). Jobs are fuzzy-matched to DOL employers via `ILIKE` prefix search, preferring the entry with the highest approval count.
+Aggregated into the `companies` table. Jobs are fuzzy-matched to DOL employers via `ILIKE` prefix search, preferring the entry with the highest approval count. A missing match or zero approvals is labeled “no DOL history found,” not rejected. The current schema stores cumulative history, so the digest does not claim that an individual company filed recently.
 
 ## Database schema
 
@@ -268,7 +271,7 @@ python agents/mcp_server.py
 
 **Groq rate limit errors** — The pipeline sleeps 2.5s between scoring calls by default. Tune `GROQ_REQUEST_DELAY_SECONDS` or reduce `MAX_DAILY_MATCHES` if your model-specific limits are lower.
 
-**0% approval rate on all jobs** — Sponsorship data hasn't been loaded. Run `python etl/process_sponsorship_data.py`. The fuzzy matcher requires company names in the `companies` table to link against.
+**0% approval rate on all jobs** — Sponsorship data may not be loaded or the employers may have no matching DOL history. Run `python etl/process_sponsorship_data.py`; zero-history jobs remain eligible and are labeled clearly in the digest.
 
 **No jobs extracted** — Direct-feed failures are isolated per board and logged. Check whether a company changed its board identifier; search discovery can still recover supported schema.org postings.
 

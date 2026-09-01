@@ -137,28 +137,40 @@ class SupabaseClient:
             return None
     
     def get_unnotified_matches(self, min_score: int = 80) -> List[Dict]:
-        """Get high-scoring matches that haven't been notified."""
+        """Get unnotified matches without gating on historical DOL activity."""
         try:
-            result = self.client.table("active_matches").select("*").eq(
+            result = self.client.table("job_matches").select(
+                "id,job_id,cosine_similarity,llama_score,llama_reasoning,"
+                "is_notified,matched_at,"
+                "jobs!inner(title,location,job_url,description,"
+                "companies(employer_name,approval_rate,total_approvals,"
+                "h1b_approvals,perm_approvals,lca_approvals)),"
+                "user_resume!inner(profile_name)"
+            ).eq(
                 "is_notified", False
-            ).gte("llama_score", min_score).execute()
-            matches = result.data or []
+            ).gte("llama_score", min_score).order(
+                "llama_score", desc=True
+            ).execute()
 
-            # active_matches intentionally stays compact, but notification
-            # eligibility also needs the full description for multi-country
-            # postings whose short location label is incomplete.
-            job_ids = list({match["job_id"] for match in matches if match.get("job_id")})
-            if job_ids:
-                jobs_result = self.client.table("jobs").select(
-                    "id,description"
-                ).in_("id", job_ids).execute()
-                descriptions = {
-                    job["id"]: job.get("description", "")
-                    for job in (jobs_result.data or [])
-                }
-                for match in matches:
-                    match["description"] = descriptions.get(match.get("job_id"), "")
-
+            matches = []
+            for row in result.data or []:
+                job = row.get("jobs") or {}
+                company = job.get("companies") or {}
+                resume = row.get("user_resume") or {}
+                matches.append({
+                    **{k: v for k, v in row.items() if k not in {"jobs", "user_resume"}},
+                    "title": job.get("title"),
+                    "location": job.get("location"),
+                    "job_url": job.get("job_url"),
+                    "description": job.get("description", ""),
+                    "employer_name": company.get("employer_name") or "Unknown company",
+                    "approval_rate": company.get("approval_rate") or 0,
+                    "total_approvals": company.get("total_approvals") or 0,
+                    "h1b_approvals": company.get("h1b_approvals") or 0,
+                    "perm_approvals": company.get("perm_approvals") or 0,
+                    "lca_approvals": company.get("lca_approvals") or 0,
+                    "resume_profile": resume.get("profile_name") or "Default",
+                })
             return matches
         except Exception as e:
             print(f"Error fetching unnotified matches: {e}")

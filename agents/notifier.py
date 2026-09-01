@@ -3,6 +3,7 @@ Smart notification system - sends daily digest of high-quality matches.
 """
 import os
 import smtplib
+from html import escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import List, Dict
@@ -13,7 +14,11 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from utils.supabase_client import get_supabase_client
-from utils.job_location import assess_us_job_location
+from utils.job_location import (
+    assess_sponsorship_language,
+    assess_us_job_location,
+    classify_sponsorship_language,
+)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -48,18 +53,18 @@ def format_match_email(matches: List[Dict]) -> str:
     </head>
     <body>
         <h2>🎯 Your Daily Job Matches</h2>
-        <p>Found {count} high-quality sponsored job matches for you!</p>
+        <p>Found {count} high-quality, OPT-compatible job matches for you!</p>
     """.format(count=len(matches))]
     
     for i, match in enumerate(matches, 1):
-        title = match.get('title', 'N/A')
-        employer = match.get('employer_name', 'N/A')
-        location = match.get('location', 'N/A')
+        title = escape(str(match.get('title') or 'N/A'))
+        employer = escape(str(match.get('employer_name') or 'N/A'))
+        location = escape(str(match.get('location') or 'N/A'))
         score = match.get('llama_score', 0)
-        profile = match.get('resume_profile', 'Default')
-        approval_rate = match.get('approval_rate', 0)
-        reasoning = match.get('llama_reasoning', 'No reasoning available')
-        job_url = match.get('job_url', '#')
+        profile = escape(str(match.get('resume_profile') or 'Default'))
+        reasoning = escape(str(match.get('llama_reasoning') or 'No reasoning available'))
+        job_url = escape(str(match.get('job_url') or '#'), quote=True)
+        sponsorship_signal = escape(format_sponsorship_signal(match))
         
         match_html = """
         <div class="match">
@@ -68,7 +73,7 @@ def format_match_email(matches: List[Dict]) -> str:
             <div>👤 Resume profile: {profile}</div>
             <div>📍 {location}</div>
             <div class="score">⭐ Match Score: {score}/100</div>
-            <div>✅ Sponsorship Approval Rate: {rate:.1f}%</div>
+            <div>🛂 {sponsorship_signal}</div>
             <div class="reasoning">💡 {reasoning}</div>
             <div style="margin-top: 10px;">
                 <a href="{url}" style="color: #3498db;">View Job →</a>
@@ -81,7 +86,7 @@ def format_match_email(matches: List[Dict]) -> str:
             profile=profile,
             location=location,
             score=score,
-            rate=approval_rate,
+            sponsorship_signal=sponsorship_signal,
             reasoning=reasoning,
             url=job_url
         )
@@ -93,6 +98,32 @@ def format_match_email(matches: List[Dict]) -> str:
     """)
     
     return ''.join(html_parts)
+
+
+def format_sponsorship_signal(match: Dict) -> str:
+    """Describe current JD language first and DOL history second."""
+    status, _ = classify_sponsorship_language(
+        match.get("description", ""), match.get("title", "")
+    )
+    approvals = int(match.get("total_approvals") or 0)
+    approval_rate = float(match.get("approval_rate") or 0)
+
+    if status == "explicit_sponsorship":
+        if approvals:
+            return (
+                f"JD indicates sponsorship support; DOL history: {approvals} "
+                f"approvals ({approval_rate:.1f}%)."
+            )
+        return "JD indicates sponsorship support; no DOL history found in loaded datasets."
+    if approvals:
+        return (
+            f"JD has no work-authorization exclusion; DOL history: {approvals} "
+            f"approvals ({approval_rate:.1f}%). Confirm future sponsorship."
+        )
+    return (
+        "JD has no work-authorization exclusion; no DOL sponsorship history found. "
+        "OPT/STEM OPT may work now, but future sponsorship is unconfirmed."
+    )
 
 
 def send_email(to_email: str, subject: str, html_content: str) -> bool:
@@ -144,13 +175,22 @@ def send_daily_digest():
             match.get("location", ""),
             match.get("description", ""),
         )
-        if eligible:
-            eligible_matches.append(match)
-        else:
+        if not eligible:
             print(
                 f"Skipping non-US notification: {match.get('title', 'Untitled')} "
                 f"({match.get('location', 'unknown')}) — {reason}"
             )
+            continue
+        authorization_eligible, authorization_reason = assess_sponsorship_language(
+            match.get("description", ""), match.get("title", "")
+        )
+        if not authorization_eligible:
+            print(
+                f"Skipping work-authorization-incompatible notification: "
+                f"{match.get('title', 'Untitled')} — {authorization_reason}"
+            )
+            continue
+        eligible_matches.append(match)
     matches = eligible_matches
     
     if not matches:
@@ -165,7 +205,7 @@ def send_daily_digest():
         print("NOTIFICATION_EMAIL not configured")
         return
     
-    subject = f"🎯 {len(matches)} New Sponsored Job Matches - {datetime.now().strftime('%Y-%m-%d')}"
+    subject = f"🎯 {len(matches)} New OPT-Compatible Job Matches - {datetime.now().strftime('%Y-%m-%d')}"
     html_content = format_match_email(matches)
     
     if send_email(notification_email, subject, html_content):
