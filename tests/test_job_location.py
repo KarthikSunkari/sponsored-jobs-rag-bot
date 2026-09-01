@@ -24,6 +24,8 @@ from utils.job_location import (
         "Netherlands",
         "Spain",
         "Portugal",
+        "telengana, in",
+        "Karnataka, IN",
     ],
 )
 def test_foreign_only_locations_are_excluded(location):
@@ -175,6 +177,19 @@ def test_incompatible_work_authorization_requirements_are_excluded(
 
     assert eligible is False
     assert reason_fragment.lower() in reason.lower()
+
+
+def test_itar_enumerated_citizenship_requirement_is_excluded():
+    description = (
+        "ITAR REQUIREMENTS: Applicant must be a (i) U.S. citizen or national, "
+        "(ii) U.S. lawful permanent resident (green card holder), (iii) refugee, "
+        "or (iv) asylee, or be eligible for State Department authorization."
+    )
+
+    eligible, reason = assess_sponsorship_language(description, "Software Engineer")
+
+    assert eligible is False
+    assert "citizenship" in reason
 
 
 def test_plain_us_work_authorization_is_opt_compatible():

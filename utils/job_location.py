@@ -51,7 +51,9 @@ _GLOBAL_DESCRIPTION_PATTERNS = (
 
 _FOREIGN_LOCATION_PATTERNS = (
     r"\b(?:india|bengaluru|bangalore|hyderabad|pune|gurugram|gurgaon|noida|"
-    r"mumbai|chennai|delhi)\b",
+    r"mumbai|chennai|delhi|telangana|telengana|karnataka|maharashtra|kerala|"
+    r"tamil nadu|andhra pradesh|haryana|uttar pradesh|gujarat|rajasthan|"
+    r"west bengal)\b",
     r"\b(?:brazil|brasil|sao paulo|são paulo|rio de janeiro|latam|latin america|"
     r"south america)\b",
     r"\b(?:united kingdom|u\.?k\.?|london|manchester|ireland|dublin)\b",
@@ -176,7 +178,9 @@ _WORK_AUTHORIZATION_EXCLUSIONS = (
             r"\b(?:u\.?s\.?|united states)\s+citizenship\s+(?:is\s+)?required\b|"
             r"\bmust\s+be\s+(?:a\s+)?(?:u\.?s\.?|united states)\s+citizens?\b|"
             r"\b(?:only|solely)\s+(?:u\.?s\.?|united states)\s+citizens?\b|"
-            r"\b(?:u\.?s\.?\s+)?citizens?\s+(?:only|required)\b"
+            r"\b(?:u\.?s\.?\s+)?citizens?\s+(?:only|required)\b|"
+            r"\b(?:applicants?|candidates?)\s+must\s+be\b.{0,100}"
+            r"\b(?:u\.?s\.?|united states)\s+citizens?\b"
         ),
         "posting requires US citizenship",
     ),
