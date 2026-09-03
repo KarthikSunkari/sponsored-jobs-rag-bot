@@ -8,7 +8,7 @@ This system uses Docker containerization for consistent Selenium execution acros
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│             GitHub Actions (Daily at 14:00 UTC)         │
+│            GitHub Actions (Daily at 13:35 UTC)         │
 ├─────────────────────────────────────────────────────────┤
 │  1. Poll direct ATS feeds + discovery (100 jobs)        │
 │  2. Match Jobs (pgvector + Groq)                        │
@@ -93,7 +93,7 @@ Add the following secrets:
 
 1. Go to **Actions** tab in your repo
 2. Enable workflows if prompted
-3. The workflow will run automatically at 9 AM EST daily
+3. The workflow will run automatically at 13:35 UTC daily
 4. You can also trigger manually via **Run workflow** button
 
 ### 3. Monitor Runs
@@ -105,7 +105,7 @@ Add the following secrets:
 ## Workflow Schedule
 
 The GitHub Actions workflow runs:
-- **Daily at 9 AM EST** (2 PM UTC)
+- **Daily at 13:35 UTC** (8:35 AM Central while daylight saving time is active)
 - **Manual trigger** available anytime
 
 ## Cost Analysis
@@ -126,9 +126,9 @@ schedule:
   # Run at 6 AM EST (11 AM UTC)
   - cron: '0 11 * * *'
   
-  # Run twice daily (9 AM and 6 PM EST)
-  - cron: '0 14 * * *'  # 9 AM EST
-  - cron: '0 23 * * *'  # 6 PM EST
+  # Run twice daily, away from top-of-hour scheduler congestion
+  - cron: '35 13 * * *'
+  - cron: '35 22 * * *'
 ```
 
 ### Adjust Job Limits

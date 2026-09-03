@@ -5,7 +5,7 @@ Automated job discovery pipeline that scrapes ATS platforms daily, scores listin
 ## How it works
 
 ```
- GitHub Actions (cron: daily at 14:00 UTC)
+ GitHub Actions (cron: daily at 13:35 UTC)
  ├─ scrape-jobs ──────────┐
  │                        ▼
  │                   match-jobs ──► send-notifications
@@ -223,7 +223,7 @@ Go to repo Settings → Secrets and variables → Actions. Add:
 
 ### Automated (GitHub Actions)
 
-The `daily-jobs.yml` workflow runs every day at 14:00 UTC:
+The `daily-jobs.yml` workflow runs every day at 13:35 UTC (8:35 AM Central while daylight saving time is active):
 
 1. **scrape-jobs** — polls direct feeds with a seven-day overlap and discovers extra ATS URLs, selecting up to 100 diverse jobs
 2. **match-jobs** — vector search + LLM scoring against active resume profiles
