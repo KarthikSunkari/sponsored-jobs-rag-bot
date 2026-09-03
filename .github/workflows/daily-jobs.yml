@@ -2,8 +2,8 @@ name: Daily Job Scraping and Matching
 
 on:
   schedule:
-    # Run every day at 14:00 UTC.
-    - cron: '0 14 * * *'
+    # Run every day at 13:35 UTC, away from top-of-hour scheduler congestion.
+    - cron: '35 13 * * *'
   workflow_dispatch:  # Allow manual trigger
 
 env:
